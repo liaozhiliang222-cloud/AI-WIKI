@@ -37,7 +37,7 @@
     "binding": "AI"
   },
   "triggers": {
-    "crons": ["0 */6 * * *", "30 0 * * *", "0 1 * * 0"]
+    "crons": ["0 */6 * * *", "30 0 * * *", "0 1 * * SUN"]
   },
   "vars": {
     "APP_NAME": "AI Compass 知识资讯平台",
