@@ -12,7 +12,7 @@
     {
       "binding": "DB",
       "database_name": "ai-compass-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "fd8b748e-65bd-4f5d-86a2-e6648ff8c917",
       "migrations_dir": "migrations"
     }
   ],
