@@ -1,0 +1,51 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "aiwiki",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-07-11",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ai-compass-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "CONTENT_QUEUE",
+        "queue": "ai-compass-content"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "ai-compass-content",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "ai-compass-content-dlq"
+      }
+    ]
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "triggers": {
+    "crons": ["0 */6 * * *", "30 0 * * *", "0 1 * * 0"]
+  },
+  "vars": {
+    "APP_NAME": "AI Compass 知识资讯平台",
+    "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
+    "ENABLE_AUTO_PUBLISH": "true"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.25
+  }
+}

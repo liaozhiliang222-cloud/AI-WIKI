@@ -1,0 +1,53 @@
+{
+  "name": "ai-compass-complete-pwa",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --mode devlocal",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "deploy": "npm run db:migrate:remote && wrangler deploy",
+    "cf:typegen": "wrangler types",
+    "db:migrate:local": "wrangler d1 migrations apply ai-compass-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "db:seed:local": "wrangler d1 execute ai-compass-db --local --file=./seed.sql",
+    "db:seed:remote": "wrangler d1 execute DB --remote --file=./seed.sql",
+    "check": "tsc -b && vite build",
+    "preview:local": "vite preview --mode devlocal",
+    "deploy:full": "npm run build && npm run deploy"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.10.0",
+    "lucide-react": "^1.24.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.44.0",
+    "@cloudflare/workers-types": "^5.20260711.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.4",
+    "wrangler": "^4.110.0"
+  },
+  "description": "AI知识库、资讯日报、精品周报、资讯库与AI问答一体化PWA，可通过GitHub部署到Cloudflare Workers",
+  "cloudflare": {
+    "bindings": {
+      "ADMIN_TOKEN": {
+        "description": "管理员后台令牌。请填写一段至少 24 位、难以猜测的随机字符串。"
+      },
+      "DB": {
+        "description": "用于保存知识、资讯源、文章与简报的 D1 数据库。"
+      },
+      "CONTENT_QUEUE": {
+        "description": "用于异步处理 RSS 抓取与 AI 内容加工的队列。"
+      },
+      "AI": {
+        "description": "用于摘要、分类与知识库问答的 Workers AI 绑定。"
+      }
+    }
+  }
+}
