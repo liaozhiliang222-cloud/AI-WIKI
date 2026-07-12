@@ -15,6 +15,9 @@ export type Article = {
   summary: string;
   why_it_matters: string;
   content: string;
+  original_title?: string;
+  original_content?: string;
+  source_language?: string;
   source_name: string;
   source_url: string;
   published_at: string;

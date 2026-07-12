@@ -2,6 +2,7 @@ import type { Article, ContentType, Dashboard, Digest, DigestType, Source } from
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
+    cache: "no-store",
     ...init,
     headers: {
       "content-type": "application/json",
@@ -41,6 +42,11 @@ export const api = {
     body: JSON.stringify(source),
   }),
   scan: (token: string) => request<{ queued: number }>("/api/admin/scan", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({}),
+  }),
+  retranslate: (token: string) => request<{ queued: number }>("/api/admin/retranslate", {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify({}),

@@ -165,3 +165,21 @@ a { color: inherit; }
 @media (max-width: 620px) {
   .digest-banner-grid { margin-top:34px; }
 }
+
+/* 2026-07 产品体验升级：移动端阴影、日报刷新与中英双语阅读 */
+.original-title { margin-top:-4px !important; color:#8793a6 !important; font-size:11px !important; line-height:1.6 !important; }
+.language-switch { display:flex; gap:8px; margin:22px 0 10px; padding:5px; width:max-content; max-width:100%; border:1px solid var(--line); border-radius:12px; background:#fff; }
+.language-switch button { min-height:36px; display:flex; align-items:center; gap:7px; padding:0 13px; border:0; border-radius:8px; background:transparent; color:#66758c; font-size:11px; font-weight:700; cursor:pointer; }
+.language-switch button.active { background:var(--blue-soft); color:var(--blue); }
+.admin-actions button:disabled,.admin-auth button:disabled,.source-form button:disabled { opacity:.58; cursor:not-allowed; }
+
+@media (max-width: 820px) {
+  /* 侧栏收起时不再把深色阴影投到屏幕左缘。 */
+  .sidebar { box-shadow:none; }
+  .sidebar.sidebar-open { box-shadow:20px 0 50px rgba(4,14,33,.25); }
+}
+
+@media (max-width: 620px) {
+  .language-switch { width:100%; }
+  .language-switch button { flex:1; justify-content:center; }
+}

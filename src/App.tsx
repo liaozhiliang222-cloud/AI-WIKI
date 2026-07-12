@@ -11,6 +11,7 @@ import {
   FileText,
   Home,
   Library,
+  Languages,
   Menu,
   Plus,
   RefreshCw,
@@ -203,12 +204,28 @@ export default function App() {
 
   const allRecent = useMemo(() => [...dashboard.latest_knowledge, ...dashboard.latest_news], [dashboard]);
 
+  async function refreshDashboard() {
+    const data = await api.dashboard();
+    setDashboard(data);
+    setUsingDemo(false);
+    return data;
+  }
+
+  async function refreshDigest(type: DigestType) {
+    if (usingDemo) return;
+    try {
+      const data = await api.latestDigest(type);
+      setDashboard((current) => ({
+        ...current,
+        [type === "daily" ? "latest_daily" : "latest_weekly"]: data.digest,
+      }));
+    } catch {
+      // 保留当前内容，避免临时网络错误导致页面闪空。
+    }
+  }
+
   useEffect(() => {
-    api.dashboard()
-      .then((data) => {
-        setDashboard(data);
-        setUsingDemo(false);
-      })
+    refreshDashboard()
       .catch(() => setUsingDemo(true))
       .finally(() => setLoading(false));
   }, []);
@@ -216,6 +233,7 @@ export default function App() {
   function navigate(next: View) {
     setView(next);
     setMenuOpen(false);
+    if (next === "daily" || next === "weekly") void refreshDigest(next);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -286,11 +304,11 @@ export default function App() {
             <>
               {view === "home" && <HomePage dashboard={dashboard} onNavigate={navigate} onOpenArticle={openArticle} />}
               {view === "knowledge" && <ContentLibraryPage contentType="knowledge" categories={dashboard.categories} initialArticles={dashboard.latest_knowledge} usingDemo={usingDemo} onOpenArticle={(a) => openArticle(a, "knowledge")} />}
-              {view === "daily" && <DigestPage type="daily" digest={dashboard.latest_daily ?? demoDaily} onOpenSlug={openSlug} />}
-              {view === "weekly" && <DigestPage type="weekly" digest={dashboard.latest_weekly ?? demoWeekly} onOpenSlug={openSlug} />}
+              {view === "daily" && <DigestPage type="daily" digest={dashboard.latest_daily} onOpenSlug={openSlug} />}
+              {view === "weekly" && <DigestPage type="weekly" digest={dashboard.latest_weekly} onOpenSlug={openSlug} />}
               {view === "news" && <ContentLibraryPage contentType="news" categories={dashboard.categories} initialArticles={dashboard.latest_news} usingDemo={usingDemo} onOpenArticle={(a) => openArticle(a, "news")} />}
               {view === "ask" && <AskPage usingDemo={usingDemo} articles={allRecent} />}
-              {view === "admin" && <AdminPage usingDemo={usingDemo} />}
+              {view === "admin" && <AdminPage usingDemo={usingDemo} onDigestGenerated={async (type) => { await refreshDigest(type); }} />}
               {view === "article" && selectedArticle && <ArticlePage article={selectedArticle} onBack={() => navigate(articleBack)} />}
             </>
           )}
@@ -397,9 +415,10 @@ function SectionHeading({ eyebrow, title, action, onAction }: { eyebrow: string;
 }
 
 function ArticleCard({ article, onClick }: { article: Article; onClick: () => void }) {
+  const translated = article.content_type === "news" && article.source_language && article.source_language !== "zh";
   return (
     <button className="article-card" onClick={onClick}>
-      <div className="article-meta"><span>{article.content_type === "knowledge" ? "知识 · " : "资讯 · "}{article.category_name}</span><small><Clock3 size={13} /> {article.reading_minutes}分钟</small></div>
+      <div className="article-meta"><span>{article.content_type === "knowledge" ? "知识 · " : "资讯 · "}{article.category_name}{translated ? " · 中文解读" : ""}</span><small><Clock3 size={13} /> {article.reading_minutes}分钟</small></div>
       <h3>{article.title}</h3><p>{article.summary}</p>
       <div className="tag-row">{article.tags.slice(0, 3).map((tag) => <span key={tag}>#{tag}</span>)}</div>
       <div className="article-card-foot"><span>{formatDate(article.updated_at)}</span><ArrowRight size={17} /></div>
@@ -449,16 +468,20 @@ function ContentLibraryPage({ contentType, categories, initialArticles, usingDem
   );
 }
 
-function DigestPage({ type, digest, onOpenSlug }: { type: DigestType; digest: Digest; onOpenSlug: (slug: string) => void }) {
+function DigestPage({ type, digest, onOpenSlug }: { type: DigestType; digest: Digest | null; onOpenSlug: (slug: string) => void }) {
   const weekly = type === "weekly";
   return (
     <>
-      <PageHeader eyebrow={weekly ? "WEEKLY EDITOR'S PICKS" : "DAILY AI BRIEFING"} title={weekly ? "精品资讯周报" : "AI资讯日报"} description={weekly ? "从一周资讯中筛选真正重要、值得深读并具有持续影响的内容。" : "每天汇总过去24小时的重要AI动态，去重并解释它们为什么值得关注。"} />
-      <article className="brief-page-card">
-        <div className={`brief-cover ${weekly ? "weekly-cover" : "daily-cover"}`}><div><span>{formatDate(digest.period_start)} — {formatDate(digest.period_end)}</span><h2>{digest.title}</h2><p>{digest.intro}</p></div><div className="brief-number">{weekly ? "07" : "01"}<small>{weekly ? "WEEK" : "DAY"}</small></div></div>
-        <div className="brief-highlights">{digest.highlights.map((item, index) => <div className="highlight-item" key={`${item.title}-${index}`}><span className="highlight-number">{String(index + 1).padStart(2, "0")}</span><div><h3>{item.title}</h3><p>{item.summary}</p>{item.article_slug && <button onClick={() => onOpenSlug(item.article_slug!)}>查看完整资讯 <ArrowRight size={15} /></button>}</div></div>)}</div>
-        <div className="brief-method"><ShieldCheck size={20} /><div><strong>{weekly ? "精品筛选原则" : "日报整理原则"}</strong><p>{weekly ? "优先官方与高可信来源；合并重复事件；关注影响范围、持续价值与可行动性，而非单纯热度。" : "优先官方来源；合并重复报道；AI负责摘要与影响解释，重要结论保留原始链接。"}</p></div></div>
-      </article>
+      <PageHeader eyebrow={weekly ? "WEEKLY EDITOR'S PICKS" : "DAILY AI BRIEFING"} title={weekly ? "精品资讯周报" : "AI资讯日报"} description={weekly ? "从一周资讯中筛选真正重要、值得深读并具有持续影响的内容。" : "每天汇总最近抓取的重要AI动态，去重并解释它们为什么值得关注。"} />
+      {!digest ? (
+        <div className="empty-state"><FileText size={30} /><h3>还没有生成{weekly ? "周报" : "日报"}</h3><p>先在内容管理中抓取资讯，再生成{weekly ? "周报" : "日报"}。页面不会再用演示内容冒充最新内容。</p></div>
+      ) : (
+        <article className="brief-page-card">
+          <div className={`brief-cover ${weekly ? "weekly-cover" : "daily-cover"}`}><div><span>{formatDate(digest.period_start)} — {formatDate(digest.period_end)}</span><h2>{digest.title}</h2><p>{digest.intro}</p></div><div className="brief-number">{weekly ? "07" : "01"}<small>{weekly ? "WEEK" : "DAY"}</small></div></div>
+          <div className="brief-highlights">{digest.highlights.map((item, index) => <div className="highlight-item" key={`${item.title}-${index}`}><span className="highlight-number">{String(index + 1).padStart(2, "0")}</span><div><h3>{item.title}</h3><p>{item.summary}</p>{item.article_slug && <button onClick={() => onOpenSlug(item.article_slug!)}>查看完整资讯 <ArrowRight size={15} /></button>}</div></div>)}</div>
+          <div className="brief-method"><ShieldCheck size={20} /><div><strong>{weekly ? "精品筛选原则" : "日报整理原则"}</strong><p>{weekly ? "优先官方与高可信来源；合并重复事件；关注影响范围、持续价值与可行动性，而非单纯热度。" : "优先官方来源；合并重复报道；AI负责中文摘要与影响解释，重要结论保留原始链接。"}</p></div></div>
+        </article>
+      )}
     </>
   );
 }
@@ -496,7 +519,7 @@ function AskPage({ usingDemo, articles }: { usingDemo: boolean; articles: Articl
   );
 }
 
-function AdminPage({ usingDemo }: { usingDemo: boolean }) {
+function AdminPage({ usingDemo, onDigestGenerated }: { usingDemo: boolean; onDigestGenerated: (type: DigestType) => Promise<void> }) {
   const [token, setToken] = useState(() => localStorage.getItem("ai-compass-admin-token") || "");
   const [sources, setSources] = useState<Source[]>([]);
   const [message, setMessage] = useState("");
@@ -532,8 +555,25 @@ function AdminPage({ usingDemo }: { usingDemo: boolean }) {
   async function generateDigest(type: DigestType) {
     if (usingDemo) return setMessage(`演示模式不会真实生成${type === "daily" ? "日报" : "周报"}。`);
     setLoading(true);
-    try { const data = await api.generateDigest(token, type); setMessage(data.created ? `${type === "daily" ? "资讯日报" : "精品周报"}已生成。` : `未生成：${data.reason || "暂无可用资讯"}`); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "生成失败"); }
+    try {
+      const data = await api.generateDigest(token, type);
+      if (data.created) {
+        await onDigestGenerated(type);
+        setMessage(`${type === "daily" ? "资讯日报" : "精品周报"}已生成并刷新，共纳入 ${data.count ?? 0} 条资讯。`);
+      } else {
+        setMessage(`未生成：${data.reason === "no_articles" ? "最近没有可用的新资讯" : data.reason || "暂无可用资讯"}`);
+      }
+    } catch (error) { setMessage(error instanceof Error ? error.message : "生成失败"); }
+    finally { setLoading(false); }
+  }
+
+  async function retranslate() {
+    if (usingDemo) return setMessage("演示模式不会重新翻译资讯。");
+    setLoading(true);
+    try {
+      const data = await api.retranslate(token);
+      setMessage(`已将最近 ${data.queued} 条资讯加入中文翻译队列，请等待几分钟后刷新资讯库。`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "翻译任务触发失败"); }
     finally { setLoading(false); }
   }
 
@@ -542,7 +582,7 @@ function AdminPage({ usingDemo }: { usingDemo: boolean }) {
       <PageHeader eyebrow="CONTENT OPERATIONS" title="内容管理" description="维护权威RSS/Atom来源、手动触发抓取，并立即生成资讯日报或精品周报。抓取内容进入资讯库，知识库内容单独沉淀。" />
       <section className="admin-auth"><label><span>管理员令牌</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="输入ADMIN_TOKEN" /></label><button onClick={loadSources} disabled={loading}>{loading ? <RefreshCw size={17} className="spin" /> : <ShieldCheck size={17} />} 验证并加载</button></section>
       {message && <div className="notice">{message}</div>}
-      <div className="admin-actions"><button className="primary-button" onClick={scan}><RefreshCw size={17} /> 立即检查全部来源</button><button className="ghost-button" onClick={() => generateDigest("daily")}><FileText size={17} /> 生成日报</button><button className="ghost-button" onClick={() => generateDigest("weekly")}><Sparkles size={17} /> 生成周报</button><button className="ghost-button" onClick={() => setFormOpen(!formOpen)}><Plus size={17} /> 添加RSS来源</button></div>
+      <div className="admin-actions"><button className="primary-button" onClick={scan} disabled={loading}><RefreshCw size={17} /> 立即检查全部来源</button><button className="ghost-button" onClick={() => generateDigest("daily")} disabled={loading}><FileText size={17} /> 生成日报</button><button className="ghost-button" onClick={() => generateDigest("weekly")} disabled={loading}><Sparkles size={17} /> 生成周报</button><button className="ghost-button" onClick={retranslate} disabled={loading}><Languages size={17} /> 翻译现有资讯</button><button className="ghost-button" onClick={() => setFormOpen(!formOpen)} disabled={loading}><Plus size={17} /> 添加RSS来源</button></div>
       {formOpen && <section className="source-form"><label>来源名称<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：OpenAI News" /></label><label>RSS / Atom地址<input value={form.feed_url} onChange={(event) => setForm({ ...form, feed_url: event.target.value })} placeholder="https://example.com/rss.xml" /></label><label>官网地址<input value={form.site_url} onChange={(event) => setForm({ ...form, site_url: event.target.value })} placeholder="https://example.com" /></label><button onClick={addSource} disabled={loading}>保存来源</button></section>}
       <section className="source-table-wrap"><div className="source-table-head"><div><Rss size={19} /><strong>资讯来源</strong></div><span>{sources.length} 个</span></div>{sources.length ? <div className="source-table">{sources.map((source) => <div className="source-row" key={source.id}><div className="source-main"><span className={source.active ? "source-dot active" : "source-dot"} /><div><strong>{source.name}</strong><small>{source.feed_url}</small></div></div><span className="trust-badge">可信度 {source.trust_level}/5</span><span>{source.last_success_at ? formatDate(source.last_success_at) : "尚未运行"}</span><span className={source.last_error ? "error-text" : "success-text"}>{source.last_error ? "异常" : "正常"}</span></div>)}</div> : <div className="empty-state compact"><Rss size={24} /><p>验证令牌后加载来源列表。</p></div>}</section>
     </>
@@ -550,13 +590,26 @@ function AdminPage({ usingDemo }: { usingDemo: boolean }) {
 }
 
 function ArticlePage({ article, onBack }: { article: Article; onBack: () => void }) {
-  const paragraphs = useMemo(() => article.content.split(/\n\s*\n/).filter(Boolean), [article.content]);
   const isKnowledge = article.content_type === "knowledge";
+  const hasOriginal = !isKnowledge && Boolean(article.original_content) && article.original_content !== article.content;
+  const [showOriginal, setShowOriginal] = useState(false);
+
+  useEffect(() => setShowOriginal(false), [article.id]);
+
+  const visibleContent = showOriginal && article.original_content ? article.original_content : article.content;
+  const paragraphs = useMemo(() => visibleContent.split(/\n\s*\n/).filter(Boolean), [visibleContent]);
   return (
     <article className="article-page">
       <button className="back-link" onClick={onBack}><ChevronLeft size={18} /> 返回{isKnowledge ? "AI知识库" : "资讯库"}</button>
-      <div className="article-page-header"><div className="article-meta"><span>{isKnowledge ? "知识" : "资讯"} · {article.category_name}</span><small><Clock3 size={13} /> {article.reading_minutes}分钟</small></div><h1>{article.title}</h1><p>{article.summary}</p><div className="article-byline"><span>{isKnowledge ? "更新" : "发布"}于 {formatDate(article.updated_at)}</span><span className={`confidence ${article.confidence}`}>可信度：{article.confidence === "high" ? "高" : article.confidence === "medium" ? "中" : "低"}</span></div></div>
-      <div className="why-card"><Sparkles size={20} /><div><strong>{isKnowledge ? "核心理解" : "为什么值得关注"}</strong><p>{article.why_it_matters}</p></div></div>
+      <div className="article-page-header">
+        <div className="article-meta"><span>{isKnowledge ? "知识" : "资讯"} · {article.category_name}{!isKnowledge && article.source_language && article.source_language !== "zh" ? " · AI中文解读" : ""}</span><small><Clock3 size={13} /> {article.reading_minutes}分钟</small></div>
+        <h1>{showOriginal && article.original_title ? article.original_title : article.title}</h1>
+        {!showOriginal && hasOriginal && article.original_title && <p className="original-title">原文标题：{article.original_title}</p>}
+        {!showOriginal && <p>{article.summary}</p>}
+        <div className="article-byline"><span>{isKnowledge ? "更新" : "发布"}于 {formatDate(article.updated_at)}</span><span className={`confidence ${article.confidence}`}>可信度：{article.confidence === "high" ? "高" : article.confidence === "medium" ? "中" : "低"}</span></div>
+      </div>
+      {!isKnowledge && hasOriginal && <div className="language-switch"><button className={!showOriginal ? "active" : ""} onClick={() => setShowOriginal(false)}><Languages size={16} /> 中文解读</button><button className={showOriginal ? "active" : ""} onClick={() => setShowOriginal(true)}>原文摘录</button></div>}
+      {!showOriginal && <div className="why-card"><Sparkles size={20} /><div><strong>{isKnowledge ? "核心理解" : "为什么值得关注"}</strong><p>{article.why_it_matters}</p></div></div>}
       <div className="article-body">{paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>
       <div className="article-source"><div><ShieldCheck size={18} /><span><strong>来源</strong><small>{article.source_name}</small></span></div>{article.source_url !== "#" && <a href={article.source_url} target="_blank" rel="noreferrer">查看原文 <ExternalLink size={15} /></a>}</div>
       <div className="tag-row large">{article.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
