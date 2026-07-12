@@ -572,7 +572,7 @@ function AdminPage({ usingDemo, onDigestGenerated }: { usingDemo: boolean; onDig
     setLoading(true);
     try {
       const data = await api.retranslate(token);
-      setMessage(`已将最近 ${data.queued} 条资讯加入中文翻译队列，请等待几分钟后刷新资讯库。`);
+      setMessage(`已将 ${data.queued} 条尚未完成中文翻译的资讯加入队列，请等待几分钟后刷新资讯库。`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "翻译任务触发失败"); }
     finally { setLoading(false); }
   }
@@ -582,7 +582,7 @@ function AdminPage({ usingDemo, onDigestGenerated }: { usingDemo: boolean; onDig
       <PageHeader eyebrow="CONTENT OPERATIONS" title="内容管理" description="维护权威RSS/Atom来源、手动触发抓取，并立即生成资讯日报或精品周报。抓取内容进入资讯库，知识库内容单独沉淀。" />
       <section className="admin-auth"><label><span>管理员令牌</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="输入ADMIN_TOKEN" /></label><button onClick={loadSources} disabled={loading}>{loading ? <RefreshCw size={17} className="spin" /> : <ShieldCheck size={17} />} 验证并加载</button></section>
       {message && <div className="notice">{message}</div>}
-      <div className="admin-actions"><button className="primary-button" onClick={scan} disabled={loading}><RefreshCw size={17} /> 立即检查全部来源</button><button className="ghost-button" onClick={() => generateDigest("daily")} disabled={loading}><FileText size={17} /> 生成日报</button><button className="ghost-button" onClick={() => generateDigest("weekly")} disabled={loading}><Sparkles size={17} /> 生成周报</button><button className="ghost-button" onClick={retranslate} disabled={loading}><Languages size={17} /> 翻译现有资讯</button><button className="ghost-button" onClick={() => setFormOpen(!formOpen)} disabled={loading}><Plus size={17} /> 添加RSS来源</button></div>
+      <div className="admin-actions"><button className="primary-button" onClick={scan} disabled={loading}><RefreshCw size={17} /> 立即检查全部来源</button><button className="ghost-button" onClick={() => generateDigest("daily")} disabled={loading}><FileText size={17} /> 生成日报</button><button className="ghost-button" onClick={() => generateDigest("weekly")} disabled={loading}><Sparkles size={17} /> 生成周报</button><button className="ghost-button" onClick={retranslate} disabled={loading}><Languages size={17} /> 修复英文资讯翻译</button><button className="ghost-button" onClick={() => setFormOpen(!formOpen)} disabled={loading}><Plus size={17} /> 添加RSS来源</button></div>
       {formOpen && <section className="source-form"><label>来源名称<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：OpenAI News" /></label><label>RSS / Atom地址<input value={form.feed_url} onChange={(event) => setForm({ ...form, feed_url: event.target.value })} placeholder="https://example.com/rss.xml" /></label><label>官网地址<input value={form.site_url} onChange={(event) => setForm({ ...form, site_url: event.target.value })} placeholder="https://example.com" /></label><button onClick={addSource} disabled={loading}>保存来源</button></section>}
       <section className="source-table-wrap"><div className="source-table-head"><div><Rss size={19} /><strong>资讯来源</strong></div><span>{sources.length} 个</span></div>{sources.length ? <div className="source-table">{sources.map((source) => <div className="source-row" key={source.id}><div className="source-main"><span className={source.active ? "source-dot active" : "source-dot"} /><div><strong>{source.name}</strong><small>{source.feed_url}</small></div></div><span className="trust-badge">可信度 {source.trust_level}/5</span><span>{source.last_success_at ? formatDate(source.last_success_at) : "尚未运行"}</span><span className={source.last_error ? "error-text" : "success-text"}>{source.last_error ? "异常" : "正常"}</span></div>)}</div> : <div className="empty-state compact"><Rss size={24} /><p>验证令牌后加载来源列表。</p></div>}</section>
     </>
@@ -591,7 +591,7 @@ function AdminPage({ usingDemo, onDigestGenerated }: { usingDemo: boolean; onDig
 
 function ArticlePage({ article, onBack }: { article: Article; onBack: () => void }) {
   const isKnowledge = article.content_type === "knowledge";
-  const hasOriginal = !isKnowledge && Boolean(article.original_content) && article.original_content !== article.content;
+  const hasOriginal = !isKnowledge && article.source_language !== "zh" && Boolean(article.original_content);
   const [showOriginal, setShowOriginal] = useState(false);
 
   useEffect(() => setShowOriginal(false), [article.id]);
