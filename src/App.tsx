@@ -273,6 +273,13 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+function hasMeaningfulChinese(text?: string, minChars = 12) {
+  if (!text) return false;
+  const compact = text.replace(/\s+/g, "");
+  const chinese = (compact.match(/[\u3400-\u9fff]/g) || []).length;
+  return chinese >= minChars && chinese / Math.max(compact.length, 1) >= 0.08;
+}
+
 export default function App() {
   const [view, setView] = useState<View>("home");
   const [dashboard, setDashboard] = useState<Dashboard>(demoDashboard);
@@ -1306,7 +1313,7 @@ function AdminPage({
     try {
       const data = await api.retranslate(token);
       setMessage(
-        `已将 ${data.queued} 条尚未完成中文翻译的资讯加入队列，请等待几分钟后刷新资讯库。`,
+        `已将 ${data.queued} 条中文正文不完整的资讯加入重处理队列，请等待3—10分钟后刷新资讯库。`,
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "翻译任务触发失败");
@@ -1382,7 +1389,7 @@ function AdminPage({
           onClick={retranslate}
           disabled={loading}
         >
-          <Languages size={17} /> 修复英文资讯翻译
+          <Languages size={17} /> 修复资讯库中文正文
         </button>
         <button
           className="ghost-button"
@@ -1494,8 +1501,15 @@ function ArticlePage({
   onBack: () => void;
 }) {
   const isKnowledge = article.content_type === "knowledge";
+  const chineseReady =
+    isKnowledge ||
+    article.source_language === "zh" ||
+    hasMeaningfulChinese(article.content, 30);
+  const translationPending =
+    !isKnowledge && article.source_language !== "zh" && !chineseReady;
   const hasOriginal =
     !isKnowledge &&
+    chineseReady &&
     Boolean(article.original_content) &&
     (article.original_content !== article.content ||
       article.original_title !== article.title);
@@ -1506,7 +1520,9 @@ function ArticlePage({
   const visibleContent =
     showOriginal && article.original_content
       ? article.original_content
-      : article.content;
+      : translationPending
+        ? article.original_content || article.content
+        : article.content;
   const paragraphs = useMemo(
     () => visibleContent.split(/\n\s*\n/).filter(Boolean),
     [visibleContent],
@@ -1523,7 +1539,9 @@ function ArticlePage({
             {!isKnowledge &&
             article.source_language &&
             article.source_language !== "zh"
-              ? " · AI中文解读"
+              ? chineseReady
+                ? " · AI中文解读"
+                : " · 中文翻译处理中"
               : ""}
           </span>
           <small>
@@ -1533,7 +1551,9 @@ function ArticlePage({
         <h1>
           {showOriginal && article.original_title
             ? article.original_title
-            : article.title}
+            : translationPending && article.original_title
+              ? article.original_title
+              : article.title}
         </h1>
         {!showOriginal && hasOriginal && article.original_title && (
           <p className="original-title">原文标题：{article.original_title}</p>
@@ -1553,6 +1573,15 @@ function ArticlePage({
           </span>
         </div>
       </div>
+      {translationPending && (
+        <div className="why-card translation-pending">
+          <Languages size={20} />
+          <div>
+            <strong>中文解读正在生成</strong>
+            <p>当前先显示原文摘录。管理员可在内容管理中点击“修复资讯库中文正文”，处理完成后刷新本页。</p>
+          </div>
+        </div>
+      )}
       {!isKnowledge && hasOriginal && (
         <div className="language-switch">
           <button
