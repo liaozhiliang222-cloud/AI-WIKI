@@ -24,6 +24,63 @@ function modelText(result: unknown): string {
   return typeof content === "string" ? content : "";
 }
 
+
+function chineseRatio(text: string) {
+  const compact = text.replace(/\s+/g, "");
+  if (!compact) return 0;
+  const chinese = (compact.match(/[\u3400-\u9fff]/g) || []).length;
+  return chinese / compact.length;
+}
+
+function translationText(result: unknown): string {
+  if (typeof result === "string") return result.trim();
+  if (!result || typeof result !== "object") return "";
+  const object = result as Record<string, unknown>;
+  for (const key of ["translated_text", "translation", "response", "result"]) {
+    if (typeof object[key] === "string") return String(object[key]).trim();
+  }
+  return "";
+}
+
+function splitForTranslation(text: string, maxChars = 1800) {
+  const normalized = text.replace(/\r/g, "").trim();
+  if (!normalized) return [];
+  const paragraphs = normalized.split(/\n\s*\n/).filter(Boolean);
+  const chunks: string[] = [];
+  let current = "";
+  for (const paragraph of paragraphs) {
+    const pieces = paragraph.length > maxChars
+      ? paragraph.match(new RegExp(`.{1,${maxChars}}(?:[.!?。！？\n]|$)`, "gs")) || [paragraph]
+      : [paragraph];
+    for (const piece of pieces) {
+      if (current && current.length + piece.length + 2 > maxChars) {
+        chunks.push(current);
+        current = piece;
+      } else {
+        current = current ? `${current}\n\n${piece}` : piece;
+      }
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks.slice(0, 4);
+}
+
+async function translateEnglishToChinese(env: Env, text: string) {
+  const chunks = splitForTranslation(clampText(text, 7000));
+  if (!chunks.length) return "";
+  const translated: string[] = [];
+  for (const chunk of chunks) {
+    const result = await env.AI.run("@cf/meta/m2m100-1.2b" as keyof AiModels, {
+      text: chunk,
+      source_lang: "english",
+      target_lang: "chinese",
+    } as never);
+    const value = translationText(result);
+    if (value) translated.push(value);
+  }
+  return translated.join("\n\n").trim();
+}
+
 function detectLanguage(text: string) {
   const compact = text.replace(/\s+/g, "").slice(0, 1500);
   if (!compact) return "unknown";
@@ -62,10 +119,31 @@ export async function summarizeArticle(env: Env, input: { title: string; descrip
       temperature: 0.15,
     } as never);
     const parsed = parseJsonFromModel(modelText(result));
+    const resolvedLanguage = ["zh", "en", "other"].includes(String(parsed.source_language))
+      ? String(parsed.source_language)
+      : fallback.sourceLanguage;
+    let translatedTitle = clampText(String(parsed.translated_title || fallback.translatedTitle), 220);
+    let translatedContent = clampText(String(parsed.translated_content || fallback.translatedContent), 6000);
+
+    // Qwen 偶尔会返回不完整 JSON，或只生成中文摘要而保留英文标题/正文。
+    // 对英文来源使用专门的翻译模型兜底，确保用户实际能看到中文内容。
+    if (resolvedLanguage === "en" && (chineseRatio(translatedTitle) < 0.06 || chineseRatio(translatedContent) < 0.06)) {
+      try {
+        const [titleTranslation, contentTranslation] = await Promise.all([
+          translateEnglishToChinese(env, input.title),
+          translateEnglishToChinese(env, input.content || input.description),
+        ]);
+        if (titleTranslation) translatedTitle = clampText(titleTranslation, 220);
+        if (contentTranslation) translatedContent = clampText(contentTranslation, 6000);
+      } catch (translationError) {
+        console.warn("Dedicated translation fallback failed", translationError);
+      }
+    }
+
     return {
-      translatedTitle: clampText(String(parsed.translated_title || fallback.translatedTitle), 220),
-      translatedContent: clampText(String(parsed.translated_content || fallback.translatedContent), 6000),
-      sourceLanguage: ["zh", "en", "other"].includes(String(parsed.source_language)) ? String(parsed.source_language) : fallback.sourceLanguage,
+      translatedTitle,
+      translatedContent,
+      sourceLanguage: resolvedLanguage,
       isAiRelevant: typeof parsed.is_ai_relevant === "boolean" ? parsed.is_ai_relevant : fallback.isAiRelevant,
       summary: clampText(String(parsed.summary || fallback.summary), 260),
       whyItMatters: clampText(String(parsed.why_it_matters || fallback.whyItMatters), 220),
@@ -75,6 +153,22 @@ export async function summarizeArticle(env: Env, input: { title: string; descrip
     };
   } catch (error) {
     console.warn("AI summarization fallback", error);
+    if (sourceLanguage === "en") {
+      try {
+        const [translatedTitle, translatedContent] = await Promise.all([
+          translateEnglishToChinese(env, input.title),
+          translateEnglishToChinese(env, input.content || input.description),
+        ]);
+        return {
+          ...fallback,
+          translatedTitle: translatedTitle || fallback.translatedTitle,
+          translatedContent: translatedContent || fallback.translatedContent,
+          summary: translatedContent ? clampText(translatedContent, 220) : fallback.summary,
+        };
+      } catch (translationError) {
+        console.warn("Translation-only fallback failed", translationError);
+      }
+    }
     return fallback;
   }
 }

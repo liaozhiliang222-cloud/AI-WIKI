@@ -163,6 +163,10 @@ export async function generateDigestIfDue(env: Env, type: "daily" | "weekly", fo
     LEFT JOIN sources s ON s.id = a.source_id
     WHERE a.status = 'published'
       AND a.content_type = 'news'
+      AND a.source_item_id IS NOT NULL
+      AND a.source_name <> 'AI Compass 产品演示'
+      AND a.slug NOT LIKE 'demo-news-%'
+      AND (a.source_language = 'zh' OR (a.original_content <> '' AND a.content <> a.original_content))
       AND (datetime(a.published_at) >= datetime('now', ?) OR datetime(a.created_at) >= datetime('now', ?))
     ORDER BY
       COALESCE(s.trust_level, 3) DESC,
@@ -184,6 +188,10 @@ export async function generateDigestIfDue(env: Env, type: "daily" | "weekly", fo
   if (!articles.length) return { created: false, reason: "no_articles" };
 
   const digest = await createDigestWithAI(env, type, articles);
+  if (force) {
+    await env.DB.prepare("UPDATE briefs SET status = 'archived', updated_at = CURRENT_TIMESTAMP WHERE brief_type = ? AND status = 'published'")
+      .bind(type).run();
+  }
   const periodEnd = new Date();
   const periodStart = new Date(periodEnd.getTime() - (isWeekly ? 7 : 1) * 24 * 60 * 60 * 1000);
   await env.DB.prepare(`
@@ -191,4 +199,33 @@ export async function generateDigestIfDue(env: Env, type: "daily" | "weekly", fo
     VALUES (?, ?, ?, ?, ?, ?, 'published', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `).bind(type, digest.title, digest.intro, JSON.stringify(digest.highlights), periodStart.toISOString(), periodEnd.toISOString()).run();
   return { created: true, count: articles.length, type };
+}
+
+export async function queueUntranslatedNews(env: Env, limit = 50) {
+  const result = await env.DB.prepare(`
+    SELECT a.source_item_id
+    FROM articles a
+    WHERE a.content_type = 'news'
+      AND a.source_item_id IS NOT NULL
+      AND (
+        (a.source_language <> 'zh' AND (a.original_content = '' OR a.content = a.original_content))
+        OR (
+          a.source_language = 'zh'
+          AND a.content = a.original_content
+          AND a.source_name IN (
+            'OpenAI News', 'Cloudflare Blog', 'Google AI Blog', 'Google DeepMind',
+            'Google Research', 'Hugging Face Blog', 'GitHub AI & ML', 'Microsoft AI Blog',
+            'AWS Machine Learning Blog', 'NVIDIA Newsroom', 'arXiv cs.AI', 'arXiv cs.LG', 'arXiv cs.CL'
+          )
+        )
+      )
+    ORDER BY datetime(a.updated_at) DESC
+    LIMIT ?
+  `).bind(Math.min(Math.max(limit, 1), 100)).all<{ source_item_id: number }>();
+
+  const jobs = (result.results ?? []).map((row) => ({
+    body: { type: 'reprocess_item', sourceItemId: row.source_item_id } as const,
+  }));
+  if (jobs.length) await env.CONTENT_QUEUE.sendBatch(jobs);
+  return jobs.length;
 }
