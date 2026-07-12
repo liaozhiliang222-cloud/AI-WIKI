@@ -10,7 +10,8 @@ export interface Env {
 
 export type QueueJob =
   | { type: "scan_source"; sourceId: number }
-  | { type: "process_item"; sourceItemId: number };
+  | { type: "process_item"; sourceItemId: number }
+  | { type: "reprocess_item"; sourceItemId: number };
 
 export type FeedItem = {
   externalId: string;
@@ -28,6 +29,9 @@ export type ArticleRow = {
   summary: string;
   why_it_matters: string;
   content: string;
+  original_title: string;
+  original_content: string;
+  source_language: string;
   source_name: string;
   source_url: string;
   published_at: string;

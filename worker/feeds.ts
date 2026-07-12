@@ -76,7 +76,7 @@ export async function scanAllSources(env: Env) {
 
 export async function scanSource(env: Env, sourceId: number) {
   const source = await env.DB.prepare("SELECT * FROM sources WHERE id = ? AND active = 1").bind(sourceId).first<{
-    id: number; name: string; feed_url: string;
+    id: number; name: string; feed_url: string; last_success_at: string | null;
   }>();
   if (!source) return { discovered: 0 };
 
@@ -84,14 +84,16 @@ export async function scanSource(env: Env, sourceId: number) {
   try {
     const response = await fetch(source.feed_url, {
       headers: {
-        "user-agent": "AI-Compass-Knowledge-Bot/0.1 (+https://example.com/bot)",
+        "user-agent": "AI-Compass-Knowledge-Bot/0.2",
         accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5",
       },
       cf: { cacheTtl: 300, cacheEverything: true },
     });
     if (!response.ok) throw new Error(`Feed HTTP ${response.status}`);
     const xml = await response.text();
-    const items = await parseFeed(xml);
+    const parsedItems = await parseFeed(xml);
+    // 新增来源首次只处理最近6条，避免一次导入几百篇旧文并产生不必要的AI费用。
+    const items = parsedItems.slice(0, source.last_success_at ? 20 : 6);
     let discovered = 0;
 
     for (const item of items) {

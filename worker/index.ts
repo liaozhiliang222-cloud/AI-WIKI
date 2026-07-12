@@ -5,7 +5,8 @@ import type { ArticleRow, Env, QueueJob } from "./types";
 import { error, isAuthorized, json, normalizeArticle } from "./utils";
 
 const ARTICLE_SELECT = `
-  SELECT a.id, a.slug, a.title, a.summary, a.why_it_matters, a.content, a.source_name, a.source_url,
+  SELECT a.id, a.slug, a.title, a.summary, a.why_it_matters, a.content,
+         a.original_title, a.original_content, a.source_language, a.source_name, a.source_url,
          a.published_at, a.updated_at, c.slug AS category_slug, c.name AS category_name,
          a.tags_json, a.reading_minutes, a.confidence, a.content_type
   FROM articles a JOIN categories c ON c.id = a.category_id
@@ -157,6 +158,20 @@ async function manualScan(request: Request, env: Env) {
   return json({ queued });
 }
 
+async function retranslateRecent(request: Request, env: Env) {
+  if (!isAuthorized(request, env.ADMIN_TOKEN)) return error("管理员令牌无效。", 401);
+  const result = await env.DB.prepare(`
+    SELECT source_item_id
+    FROM articles
+    WHERE content_type = 'news' AND source_item_id IS NOT NULL
+    ORDER BY datetime(updated_at) DESC
+    LIMIT 50
+  `).all<{ source_item_id: number }>();
+  const jobs = (result.results ?? []).map((row) => ({ body: { type: "reprocess_item", sourceItemId: row.source_item_id } as const }));
+  if (jobs.length) await env.CONTENT_QUEUE.sendBatch(jobs);
+  return json({ queued: jobs.length });
+}
+
 async function handleFetch(request: Request, env: Env) {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -180,6 +195,7 @@ async function handleFetch(request: Request, env: Env) {
   if (request.method === "GET" && path === "/api/admin/sources") return listSources(request, env);
   if (request.method === "POST" && path === "/api/admin/sources") return addSource(request, env);
   if (request.method === "POST" && path === "/api/admin/scan") return manualScan(request, env);
+  if (request.method === "POST" && path === "/api/admin/retranslate") return retranslateRecent(request, env);
   if (request.method === "POST" && path.startsWith("/api/admin/digests/")) {
     if (!isAuthorized(request, env.ADMIN_TOKEN)) return error("管理员令牌无效。", 401);
     const type = path.endsWith("/weekly") ? "weekly" : path.endsWith("/daily") ? "daily" : null;
@@ -207,7 +223,7 @@ export default {
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     if (controller.cron === "0 */6 * * *") ctx.waitUntil(scanAllSources(env));
     else if (controller.cron === "30 0 * * *") ctx.waitUntil(generateDigestIfDue(env, "daily"));
-    else if (controller.cron === "0 1 * * 0") ctx.waitUntil(generateDigestIfDue(env, "weekly"));
+    else if (controller.cron === "0 1 * * SUN") ctx.waitUntil(generateDigestIfDue(env, "weekly"));
   },
 
   async queue(batch: MessageBatch<QueueJob>, env: Env) {
@@ -215,6 +231,7 @@ export default {
       try {
         if (message.body.type === "scan_source") await scanSource(env, message.body.sourceId);
         if (message.body.type === "process_item") await processSourceItem(env, message.body.sourceItemId);
+        if (message.body.type === "reprocess_item") await processSourceItem(env, message.body.sourceItemId, true);
         message.ack();
       } catch (cause) {
         console.error("Queue job failed", message.body, cause);

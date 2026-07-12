@@ -18,7 +18,7 @@ async function fetchArticleText(url: string, fallback: string) {
   try {
     const response = await fetch(url, {
       headers: {
-        "user-agent": "AI-Compass-Knowledge-Bot/0.1 (+https://example.com/bot)",
+        "user-agent": "AI-Compass-Knowledge-Bot/0.2",
         accept: "text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.5",
       },
       redirect: "follow",
@@ -37,7 +37,15 @@ async function fetchArticleText(url: string, fallback: string) {
   }
 }
 
-export async function processSourceItem(env: Env, sourceItemId: number) {
+function isAiFocusedSource(sourceName: string) {
+  return /OpenAI|DeepMind|Hugging Face|arXiv|AI & ML|Machine Learning|量子位|人工智能|大模型|NVIDIA/i.test(sourceName);
+}
+
+function looksAiRelevant(text: string) {
+  return /\b(ai|artificial intelligence|machine learning|deep learning|llm|large language model|generative ai|agentic|agent|transformer|neural|multimodal|rag|embedding|inference|foundation model|computer vision|robotics)\b|人工智能|大模型|生成式|智能体|机器学习|深度学习|神经网络|多模态|模型训练|模型推理|算力|芯片|机器人|提示词|知识库|向量数据库|具身智能|自动驾驶/i.test(text);
+}
+
+export async function processSourceItem(env: Env, sourceItemId: number, force = false) {
   const item = await env.DB.prepare(`
     SELECT si.*, s.name AS source_name, s.site_url
     FROM source_items si JOIN sources s ON s.id = si.source_id
@@ -53,17 +61,31 @@ export async function processSourceItem(env: Env, sourceItemId: number) {
     site_url: string;
     status: string;
   }>();
-  if (!item || item.status === "processed") return;
+  if (!item || (!force && item.status === "processed")) return;
 
-  await env.DB.prepare("UPDATE source_items SET status = 'processing', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(item.id).run();
+  const relevanceText = `${item.source_name} ${item.title} ${item.description}`;
+  if (!force && !isAiFocusedSource(item.source_name) && !looksAiRelevant(relevanceText)) {
+    await env.DB.prepare("UPDATE source_items SET status = 'ignored', error = 'not_ai_relevant', processed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .bind(item.id).run();
+    return;
+  }
+
+  await env.DB.prepare("UPDATE source_items SET status = 'processing', error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(item.id).run();
   try {
-    const content = await fetchArticleText(item.url, item.description);
+    const originalContent = await fetchArticleText(item.url, item.description);
     const analysis = await summarizeArticle(env, {
       title: item.title,
       description: item.description,
-      content,
+      content: originalContent,
       sourceName: item.source_name,
     });
+
+    if (!analysis.isAiRelevant) {
+      await env.DB.prepare("UPDATE source_items SET status = 'ignored', error = 'not_ai_relevant', processed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .bind(item.id).run();
+      return;
+    }
+
     const category = await env.DB.prepare("SELECT id FROM categories WHERE slug = ?").bind(analysis.categorySlug).first<{ id: number }>()
       ?? await env.DB.prepare("SELECT id FROM categories WHERE slug = 'products'").first<{ id: number }>();
     if (!category) throw new Error("Categories have not been seeded");
@@ -71,17 +93,22 @@ export async function processSourceItem(env: Env, sourceItemId: number) {
     const hash = await shortHash(item.url);
     const slug = slugify(item.title, hash.slice(0, 8));
     const status = env.ENABLE_AUTO_PUBLISH === "false" ? "draft" : "published";
+    const translatedContent = analysis.translatedContent || originalContent;
     await env.DB.prepare(`
       INSERT INTO articles
-        (source_id, source_item_id, category_id, slug, title, summary, why_it_matters, content, source_name, source_url,
+        (source_id, source_item_id, category_id, slug, title, summary, why_it_matters, content,
+         original_title, original_content, source_language, source_name, source_url,
          tags_json, confidence, reading_minutes, published_at, status, content_type, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'news', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'news', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT(source_item_id) DO UPDATE SET
         category_id = excluded.category_id,
         title = excluded.title,
         summary = excluded.summary,
         why_it_matters = excluded.why_it_matters,
         content = excluded.content,
+        original_title = excluded.original_title,
+        original_content = excluded.original_content,
+        source_language = excluded.source_language,
         tags_json = excluded.tags_json,
         confidence = excluded.confidence,
         reading_minutes = excluded.reading_minutes,
@@ -93,15 +120,18 @@ export async function processSourceItem(env: Env, sourceItemId: number) {
       item.id,
       category.id,
       slug,
-      item.title,
+      analysis.translatedTitle || item.title,
       analysis.summary,
       analysis.whyItMatters,
-      content,
+      translatedContent,
+      item.title,
+      originalContent,
+      analysis.sourceLanguage,
       item.source_name,
       item.url,
       JSON.stringify(analysis.tags),
       analysis.confidence,
-      readingMinutes(content),
+      readingMinutes(translatedContent),
       item.published_at,
       status,
     ).run();
@@ -117,27 +147,30 @@ export async function generateDigestIfDue(env: Env, type: "daily" | "weekly", fo
   const isWeekly = type === "weekly";
   const minIntervalHours = isWeekly ? 6 * 24 : 20;
   const latest = await env.DB.prepare(
-    "SELECT published_at FROM briefs WHERE brief_type = ? ORDER BY datetime(published_at) DESC LIMIT 1",
+    "SELECT published_at FROM briefs WHERE brief_type = ? AND status = 'published' ORDER BY datetime(published_at) DESC LIMIT 1",
   ).bind(type).first<{ published_at: string }>();
 
   if (!force && latest && Date.now() - new Date(latest.published_at).getTime() < minIntervalHours * 60 * 60 * 1000) {
     return { created: false, reason: "not_due" };
   }
 
-  const window = isWeekly ? "-8 days" : "-30 hours";
+  const window = isWeekly ? "-8 days" : "-36 hours";
   const limit = isWeekly ? 50 : 30;
   const result = await env.DB.prepare(`
     SELECT a.slug, a.title, a.summary, a.why_it_matters, a.source_name, a.confidence,
            COALESCE(s.trust_level, 3) AS trust_level
     FROM articles a
     LEFT JOIN sources s ON s.id = a.source_id
-    WHERE a.status = 'published' AND a.content_type = 'news' AND datetime(a.published_at) >= datetime('now', ?)
+    WHERE a.status = 'published'
+      AND a.content_type = 'news'
+      AND (datetime(a.published_at) >= datetime('now', ?) OR datetime(a.created_at) >= datetime('now', ?))
     ORDER BY
       COALESCE(s.trust_level, 3) DESC,
       CASE a.confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
+      datetime(a.created_at) DESC,
       datetime(a.published_at) DESC
     LIMIT ?
-  `).bind(window, limit).all<{
+  `).bind(window, window, limit).all<{
     slug: string;
     title: string;
     summary: string;
