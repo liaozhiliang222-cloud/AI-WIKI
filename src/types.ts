@@ -37,7 +37,13 @@ export type Digest = {
   brief_type: DigestType;
   title: string;
   intro: string;
-  highlights: Array<{ title: string; summary: string; article_slug?: string }>;
+  highlights: Array<{
+    title: string;
+    summary: string;
+    analysis?: string;
+    takeaways?: string[];
+    article_slug?: string;
+  }>;
   period_start: string;
   period_end: string;
   published_at: string;

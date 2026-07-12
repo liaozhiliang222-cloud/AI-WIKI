@@ -183,3 +183,36 @@ a { color: inherit; }
   .language-switch { width:100%; }
   .language-switch button { flex:1; justify-content:center; }
 }
+
+.weekly-analysis {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid #dfe9fb;
+  border-radius: 12px;
+  background: #f5f8ff;
+}
+.weekly-analysis strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #185ec8;
+  font-size: 12px;
+}
+.weekly-analysis > p {
+  margin-top: 8px;
+  color: #40516a;
+  font-size: 12px;
+  line-height: 1.85;
+}
+.weekly-analysis ul {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: #54657d;
+  font-size: 11px;
+  line-height: 1.8;
+}
+@media (max-width: 720px) {
+  .weekly-analysis { padding: 13px 14px; }
+  .weekly-analysis > p { font-size: 13px; }
+  .weekly-analysis ul { font-size: 12px; }
+}
