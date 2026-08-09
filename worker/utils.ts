@@ -21,8 +21,52 @@ export function normalizeArticle(row: ArticleRow) {
   } catch {
     tags = [];
   }
-  const { tags_json: _tagsJson, ...article } = row;
-  return { ...article, tags };
+  const audience = parseJsonArray(row.audience_json);
+  const references = parseJsonArray(row.references_json);
+  const related_slugs = parseJsonArray(row.related_slugs_json);
+  const {
+    tags_json: _tagsJson,
+    audience_json: _audienceJson,
+    references_json: _referencesJson,
+    related_slugs_json: _relatedJson,
+    ...article
+  } = row;
+  return {
+    ...article,
+    tags,
+    audience,
+    references,
+    related_slugs,
+  };
+}
+
+function parseJsonArray(value?: string | null) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 剥离 Markdown 标记，用于检索与送入模型的正文，避免 ## 表格竖线等字符污染结果。 */
+export function stripMarkdown(value: string) {
+  return value
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+[.、)]\s+/gm, "")
+    .replace(/\|/g, " ")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/^---$/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function slugify(title: string, suffix = "") {

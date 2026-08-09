@@ -7,13 +7,21 @@ import {
   queueUntranslatedNews,
 } from "./pipeline";
 import type { ArticleRow, Env, QueueJob } from "./types";
-import { error, isAuthorized, json, normalizeArticle } from "./utils";
+import {
+  error,
+  isAuthorized,
+  json,
+  normalizeArticle,
+  stripMarkdown,
+} from "./utils";
 
 const ARTICLE_SELECT = `
   SELECT a.id, a.slug, a.title, a.summary, a.why_it_matters, a.content,
          a.original_title, a.original_content, a.source_language, a.source_name, a.source_url,
          a.published_at, a.updated_at, c.slug AS category_slug, c.name AS category_name,
-         a.tags_json, a.reading_minutes, a.confidence, a.content_type
+         a.tags_json, a.reading_minutes, a.confidence, a.content_type,
+         a.knowledge_level, a.difficulty, a.audience_json, a.references_json,
+         a.related_slugs_json, a.review_status, a.reviewed_at, a.content_format, a.featured
   FROM articles a JOIN categories c ON c.id = a.category_id
 `;
 
@@ -30,8 +38,8 @@ function parseBrief<T extends { highlights_json: string }>(row: T | null) {
 }
 
 async function dashboard(env: Env) {
-  const [stats, categories, knowledge, news, daily, weekly] = await Promise.all(
-    [
+  const [stats, categories, knowledge, news, daily, weekly, featured] =
+    await Promise.all([
       env.DB.prepare(
         `
       SELECT
@@ -80,6 +88,7 @@ async function dashboard(env: Env) {
         period_end: string;
         published_at: string;
       }>(),
+      featuredKnowledge(env),
     ],
   );
   return json({
@@ -93,9 +102,106 @@ async function dashboard(env: Env) {
     categories: categories.results ?? [],
     latest_knowledge: (knowledge.results ?? []).map(normalizeArticle),
     latest_news: (news.results ?? []).map(normalizeArticle),
+    featured_knowledge: featured,
     latest_daily: parseBrief(daily),
     latest_weekly: parseBrief(weekly),
   });
+}
+
+async function featuredKnowledge(env: Env) {
+  const featured = await env.DB.prepare(
+    `${ARTICLE_SELECT} WHERE a.status = 'published' AND a.content_type = 'knowledge' AND a.featured = 1 ORDER BY datetime(a.updated_at) DESC LIMIT 15`,
+  ).all<ArticleRow>();
+  const pool = (featured.results ?? []).map(normalizeArticle);
+  // 保证精选知识类型多样：深度知识2篇 + 实践手册1篇 + 完整案例1篇，其余按时间补足。
+  const wantOrder: Array<"deep_dive" | "guide" | "case_study" | "glossary"> = [
+    "deep_dive",
+    "deep_dive",
+    "guide",
+    "case_study",
+  ];
+  const picked: ReturnType<typeof normalizeArticle>[] = [];
+  const seen = new Set<string>();
+  for (const level of wantOrder) {
+    const item = pool.find(
+      (article) => article.knowledge_level === level && !seen.has(article.slug),
+    );
+    if (item) {
+      picked.push(item);
+      seen.add(item.slug);
+    }
+  }
+  for (const item of pool) {
+    if (picked.length >= 4) break;
+    if (seen.has(item.slug)) continue;
+    picked.push(item);
+    seen.add(item.slug);
+  }
+  if (picked.length >= 4) return picked;
+  // 精选不足时（例如本地数据库尚未跑 0012），回退到最新知识，保证首页不空。
+  const fallback = await env.DB.prepare(
+    `${ARTICLE_SELECT} WHERE a.status = 'published' AND a.content_type = 'knowledge' AND a.featured = 0 ORDER BY datetime(a.updated_at) DESC LIMIT ${4 - picked.length}`,
+  ).all<ArticleRow>();
+  return [...picked, ...(fallback.results ?? []).map(normalizeArticle)];
+}
+
+async function relatedArticles(article: ReturnType<typeof normalizeArticle>, env: Env) {
+  if (article.content_type !== "knowledge") return [];
+  const related: ReturnType<typeof normalizeArticle>[] = [];
+  const seen = new Set([article.slug]);
+  const wanted = (article.related_slugs ?? []).slice(0, 4);
+  for (const slug of wanted) {
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    const row = await env.DB.prepare(
+      `${ARTICLE_SELECT} WHERE a.slug = ? AND a.status = 'published' AND a.content_type = 'knowledge' LIMIT 1`,
+    )
+      .bind(slug)
+      .first<ArticleRow>();
+    if (row) related.push(normalizeArticle(row));
+  }
+  // 不足 3 篇时用“同分类 + 标签匹配”兜底
+  if (related.length < 3) {
+    const candidates = await env.DB.prepare(
+      `${ARTICLE_SELECT} WHERE a.status = 'published' AND a.content_type = 'knowledge' AND a.category_id = (SELECT category_id FROM articles WHERE slug = ?) AND a.slug <> ? ORDER BY datetime(a.updated_at) DESC LIMIT 12`,
+    )
+      .bind(article.slug, article.slug)
+      .all<ArticleRow>();
+    const tags = article.tags.map((tag) => tag.toLowerCase());
+    const scored = (candidates.results ?? [])
+      .map((row) => {
+        const item = normalizeArticle(row);
+        if (seen.has(item.slug)) return { item, score: -1 };
+        seen.add(item.slug);
+        const match = item.tags.filter((tag) =>
+          tags.includes(tag.toLowerCase()),
+        ).length;
+        return { item, score: match };
+      })
+      .filter((entry) => entry.score >= 0)
+      .sort((a, b) => b.score - a.score || b.item.updated_at.localeCompare(a.item.updated_at));
+    for (const entry of scored) {
+      if (related.length >= 3) break;
+      related.push(entry.item);
+    }
+  }
+  return related.slice(0, 3);
+}
+
+async function prevNextKnowledge(article: ReturnType<typeof normalizeArticle>, env: Env) {
+  if (article.content_type !== "knowledge") return { prev: null, next: null };
+  const siblings = await env.DB.prepare(
+    `${ARTICLE_SELECT} WHERE a.status = 'published' AND a.content_type = 'knowledge' AND a.category_id = (SELECT category_id FROM articles WHERE slug = ?) ORDER BY datetime(a.published_at) ASC, a.id ASC`,
+  )
+    .bind(article.slug)
+    .all<ArticleRow>();
+  const list = (siblings.results ?? []).map(normalizeArticle);
+  const index = list.findIndex((item) => item.slug === article.slug);
+  if (index < 0) return { prev: null, next: null };
+  return {
+    prev: index > 0 ? list[index - 1] : null,
+    next: index < list.length - 1 ? list[index + 1] : null,
+  };
 }
 
 async function listArticles(request: Request, env: Env) {
@@ -103,15 +209,17 @@ async function listArticles(request: Request, env: Env) {
   const q = (url.searchParams.get("q") || "").trim().slice(0, 100);
   const category = (url.searchParams.get("category") || "").trim().slice(0, 50);
   const contentType = url.searchParams.get("type");
+  const level = url.searchParams.get("level");
   const limit = Math.min(
     Math.max(Number(url.searchParams.get("limit") || 30), 1),
     100,
   );
   const where = ["a.status = 'published'"];
   const bindings: unknown[] = [];
-  if (q) {
+  const hasQuery = Boolean(q);
+  if (hasQuery) {
     where.push(
-      "(a.title LIKE ? OR a.summary LIKE ? OR a.content LIKE ? OR a.tags_json LIKE ?)",
+      "(a.title LIKE ? OR a.summary LIKE ? OR a.tags_json LIKE ? OR a.content LIKE ?)",
     );
     const term = `%${q}%`;
     bindings.push(term, term, term, term);
@@ -124,9 +232,31 @@ async function listArticles(request: Request, env: Env) {
     where.push("a.content_type = ?");
     bindings.push(contentType);
   }
+  if (
+    level === "glossary" ||
+    level === "deep_dive" ||
+    level === "guide" ||
+    level === "case_study"
+  ) {
+    where.push("a.knowledge_level = ?");
+    bindings.push(level);
+  }
+  // 有搜索词时按“标题 > 摘要 > 标签 > 正文”的权重排序，避免模板化正文干扰排序。
+  let orderBy = "datetime(a.updated_at) DESC";
+  if (hasQuery) {
+    orderBy = `
+      CASE
+        WHEN a.title LIKE ? THEN 0
+        WHEN a.summary LIKE ? THEN 1
+        WHEN a.tags_json LIKE ? THEN 2
+        ELSE 3
+      END ASC, datetime(a.updated_at) DESC
+    `;
+    bindings.push(`%${q}%`, `%${q}%`, `%${q}%`);
+  }
   bindings.push(limit);
   const result = await env.DB.prepare(
-    `${ARTICLE_SELECT} WHERE ${where.join(" AND ")} ORDER BY datetime(a.updated_at) DESC LIMIT ?`,
+    `${ARTICLE_SELECT} WHERE ${where.join(" AND ")} ORDER BY ${orderBy} LIMIT ?`,
   )
     .bind(...bindings)
     .all<ArticleRow>();
@@ -139,9 +269,13 @@ async function getArticle(slug: string, env: Env) {
   )
     .bind(slug)
     .first<ArticleRow>();
-  return row
-    ? json({ article: normalizeArticle(row) })
-    : error("未找到这条内容。", 404);
+  if (!row) return error("未找到这条内容。", 404);
+  const article = normalizeArticle(row);
+  const [related, nav] = await Promise.all([
+    relatedArticles(article, env),
+    prevNextKnowledge(article, env),
+  ]);
+  return json({ article, related, ...nav });
 }
 
 function ngrams(value: string) {
@@ -193,7 +327,7 @@ async function ask(request: Request, env: Env) {
     contextSources.map((article) => ({
       title: article.title,
       summary: article.summary,
-      content: article.content,
+      content: stripMarkdown(article.content),
       source: article.source_name,
     })),
   );
@@ -284,6 +418,23 @@ async function repairWeeklyChinese(request: Request, env: Env) {
   return json({ queued });
 }
 
+async function knowledgeOverview(env: Env) {
+  const row = await env.DB.prepare(
+    `
+    SELECT
+      (SELECT COUNT(*) FROM articles WHERE status = 'published' AND content_type = 'knowledge') AS total,
+      (SELECT COUNT(*) FROM articles WHERE status = 'published' AND content_type = 'knowledge' AND knowledge_level = 'glossary') AS glossary,
+      (SELECT COUNT(*) FROM articles WHERE status = 'published' AND content_type = 'knowledge' AND knowledge_level = 'deep_dive') AS deep_dive,
+      (SELECT COUNT(*) FROM articles WHERE status = 'published' AND content_type = 'knowledge' AND knowledge_level = 'guide') AS guide,
+      (SELECT COUNT(*) FROM articles WHERE status = 'published' AND content_type = 'knowledge' AND knowledge_level = 'case_study') AS case_study,
+      (SELECT COUNT(*) FROM articles WHERE status = 'published' AND content_type = 'knowledge' AND review_status = 'editorial') AS editorial,
+      (SELECT COUNT(*) FROM articles WHERE status = 'published' AND content_type = 'knowledge' AND content_format = 'markdown') AS markdown,
+      (SELECT MAX(datetime(updated_at)) FROM articles WHERE status = 'published' AND content_type = 'knowledge') AS latest_update
+  `,
+  ).first();
+  return json({ overview: row ?? null });
+}
+
 async function handleFetch(request: Request, env: Env) {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -347,6 +498,11 @@ async function handleFetch(request: Request, env: Env) {
     return retranslateRecent(request, env);
   if (request.method === "POST" && path === "/api/admin/weekly/repair")
     return repairWeeklyChinese(request, env);
+  if (request.method === "GET" && path === "/api/admin/knowledge/stats") {
+    if (!isAuthorized(request, env.ADMIN_TOKEN))
+      return error("管理员令牌无效。", 401);
+    return knowledgeOverview(env);
+  }
   if (request.method === "POST" && path.startsWith("/api/admin/digests/")) {
     if (!isAuthorized(request, env.ADMIN_TOKEN))
       return error("管理员令牌无效。", 401);

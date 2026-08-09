@@ -1,17 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactElement, ReactNode } from "react";
+import type { Root } from "mdast";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { visit } from "unist-util-visit";
 import {
   ArrowRight,
   BookOpen,
   Bot,
+  Check,
   ChevronLeft,
+  ChevronRight,
   Clock3,
   Compass,
+  Copy,
   Database,
   ExternalLink,
   FileText,
   Home,
-  Library,
   Languages,
+  Library,
+  List,
   Menu,
   Plus,
   RefreshCw,
@@ -20,6 +29,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Users,
   X,
 } from "lucide-react";
 import { api } from "./api";
@@ -28,8 +38,11 @@ import type {
   Category,
   ContentType,
   Dashboard,
+  Difficulty,
   Digest,
   DigestType,
+  KnowledgeLevel,
+  KnowledgeOverview,
   Source,
 } from "./types";
 
@@ -77,24 +90,31 @@ const demoCategories: Category[] = [
 const demoKnowledge: Article[] = [
   {
     id: 1,
-    slug: "what-is-context-window",
-    title: "什么是上下文窗口？它为什么影响AI回答质量",
+    slug: "what-is-token",
+    title: "Token是什么？为什么字数不等于Token数",
     summary:
-      "上下文窗口决定模型一次能够读取和处理多少信息，但窗口更长并不自动等于理解更准确。",
+      "Token是模型处理文本的基本单位，可能是一个字、词的一部分或标点，不同模型的切分方式并不完全相同。",
     why_it_matters:
-      "选择模型和设计工作流时，需要同时考虑长度、检索方式、信息密度和成本。",
+      "Token直接影响上下文容量、调用成本和输出长度，是理解大模型使用限制的第一步。",
     content:
-      "上下文窗口可以理解为模型一次对话中能够看到的工作记忆。它通常以 Token 计算，包含用户问题、历史消息、系统指令以及模型生成内容。\n\n更长的上下文适合处理长文档和多轮任务，但仍可能出现信息遗漏、注意力分散与成本上升。实际产品通常会把全文检索、摘要、分段处理和长上下文结合起来。",
+      "模型并不是逐字阅读文本，而是先把内容切分成Token再进行计算。中文通常一个汉字可能接近一个Token，但数字、英文和特殊符号的切分会更复杂。\n\n设计提示词和知识库时，不应只看字符数。更稳妥的做法是控制信息密度、删除重复内容，并为长文档预留模型输出所需的Token空间。",
     source_name: "AI Compass 编辑部",
     source_url: "#",
     published_at: "2026-07-09T08:00:00Z",
     updated_at: "2026-07-10T08:00:00Z",
     category_slug: "basics",
     category_name: "基础概念",
-    tags: ["大模型", "上下文", "Token"],
+    tags: ["Token", "大模型基础", "成本"],
     reading_minutes: 4,
     confidence: "high",
     content_type: "knowledge",
+    knowledge_level: "glossary",
+    difficulty: "beginner",
+    audience: ["AI用户", "产品经理"],
+    references: [],
+    related_slugs: ["rag-vs-long-context"],
+    content_format: "plain",
+    review_status: "published",
   },
   {
     id: 2,
@@ -105,7 +125,7 @@ const demoKnowledge: Article[] = [
     why_it_matters:
       "知识库问答通常更适合以检索为主、长上下文为辅，兼顾可追溯性与成本。",
     content:
-      "RAG的核心是先从知识库中找到与问题最相关的内容，再让模型基于这些内容回答。它有利于展示来源、更新知识和控制成本。\n\n长上下文更适合材料规模可控、文档之间关系复杂、需要全局理解的任务。成熟系统不会把二者视为二选一，而是根据问题动态选择。",
+      "## 核心区别\n\nRAG的核心是先从知识库中找到与问题最相关的内容，再让模型基于这些内容回答。它有利于展示来源、更新知识和控制成本。\n\n长上下文更适合材料规模可控、文档之间关系复杂、需要全局理解的任务。成熟系统不会把二者视为二选一，而是根据问题动态选择。\n\n## 决策场景\n\n- 企业知识库问答：选RAG\n- 单份复杂文档深度理解：选长上下文\n- 客服系统：两者混合",
     source_name: "AI Compass 编辑部",
     source_url: "#",
     published_at: "2026-07-08T08:00:00Z",
@@ -116,47 +136,90 @@ const demoKnowledge: Article[] = [
     reading_minutes: 5,
     confidence: "high",
     content_type: "knowledge",
+    knowledge_level: "deep_dive",
+    difficulty: "intermediate",
+    audience: ["产品经理", "独立开发者"],
+    references: [
+      {
+        title: "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+        publisher: "arXiv",
+        url: "https://arxiv.org/abs/2005.11401",
+        official: true,
+      },
+    ],
+    related_slugs: ["what-is-token"],
+    content_format: "markdown",
+    review_status: "editorial",
   },
   {
     id: 3,
-    slug: "agent-workflow",
-    title: "AI Agent不是聊天机器人：从任务拆解到工具调用",
+    slug: "prompt-debugging",
+    title: "AI回答不好时，如何系统调试提示词",
     summary:
-      "Agent的价值在于围绕目标规划步骤、调用工具、读取结果并持续修正，而不仅是生成一段文字。",
+      "提示词写不好，多数不是措辞不够好，而是任务设计有问题。本文给出七步调试框架。",
     why_it_matters:
-      "理解Agent边界，有助于判断一个产品是真自动化，还是只在普通对话框外套了一层包装。",
+      "把随机改词重试变成按诊断树定位问题，调试Prompt的时间可以缩短一个数量级。",
     content:
-      "一个典型Agent通常包含目标、状态、工具、循环和停止条件。模型负责判断下一步，外部程序负责真正执行搜索、数据库查询或文件处理。\n\nAgent的主要风险来自错误累积、权限过大、成本失控和缺少确认节点，因此需要日志、预算、重试和人工审核机制。",
+      "## Step 1：信息是否足够\n\n模型需要的所有事实是否都在输入里？信息不足是幻觉的第一来源。\n\n## Step 2：目标是否清楚\n\n用「角色+目标+输入+规则+输出+校验」结构重写提示词。\n\n## Step 3：规则是否冲突\n\n规则逐条编号，用示例表达模糊要求。\n\n## Step 4：是否需要示例\n\n一个高质量示例胜过三句规则描述。",
     source_name: "AI Compass 编辑部",
     source_url: "#",
     published_at: "2026-07-07T08:00:00Z",
     updated_at: "2026-07-07T08:00:00Z",
-    category_slug: "products",
-    category_name: "模型与产品",
-    tags: ["Agent", "自动化", "工具调用"],
+    category_slug: "practice",
+    category_name: "应用实践",
+    tags: ["提示词", "调试", "工作流"],
     reading_minutes: 6,
     confidence: "high",
     content_type: "knowledge",
+    knowledge_level: "guide",
+    difficulty: "beginner",
+    audience: ["AI用户", "知识工作者"],
+    references: [
+      {
+        title: "OpenAI Prompt Engineering 官方指南",
+        publisher: "OpenAI",
+        url: "https://platform.openai.com/docs/guides/prompt-engineering",
+        official: true,
+      },
+    ],
+    related_slugs: ["rag-vs-long-context"],
+    content_format: "markdown",
+    review_status: "editorial",
   },
   {
     id: 4,
-    slug: "ai-research-workflow",
-    title: "研究人员如何把AI嵌入访谈、编码与报告流程",
+    slug: "open-coding-ai",
+    title: "AI如何辅助开放编码",
     summary:
-      "最稳妥的方法不是让AI一次生成整份报告，而是把资料清洗、编码、证据关联和洞察表达拆成可核验环节。",
-    why_it_matters: "分阶段工作流能减少幻觉，并保留从结论回到原始证据的路径。",
+      "教学示例：从访谈原话出发，经过开放编码、编码合并、主题归纳、反例检查到洞察形成的完整过程。",
+    why_it_matters:
+      "把研究过程拆成可核验的环节，AI的产出才真正可用；AI提出、研究者裁决。",
     content:
-      "研究型AI工作流可以拆分为：材料整理、说话人校正、开放编码、主题聚类、反例检查、洞察提炼和报告表达。\n\n每一步都应输出结构化中间结果，并保留对应原话、样本编号和置信度。AI适合提高效率，研究者仍负责定义问题、判断证据与形成最终观点。",
+      "> 本文是教学示例：所有访谈数据均为虚构。\n\n## 输入：访谈原话\n\n- P01：我到现在还是习惯用邮件，同事在软件里@我，我经常隔天才看到。\n- P02：工具太多了，每天光切换就烦死了。\n\n## 开放编码\n\n- 习惯性使用旧工具（P01）\n- 新工具消息不及时查看（P01）\n- 工具数量过多（P02）\n- 多工具切换负担（P02）\n\n## 研究者的工作\n\n逐条核对编码是否忠于原话，是否引入模型自己的推断。AI提出、研究者裁决。",
     source_name: "AI Compass 编辑部",
     source_url: "#",
     published_at: "2026-07-06T08:00:00Z",
     updated_at: "2026-07-06T08:00:00Z",
     category_slug: "research",
     category_name: "研究与咨询",
-    tags: ["定性研究", "访谈", "洞察"],
+    tags: ["定性研究", "开放编码", "访谈"],
     reading_minutes: 7,
     confidence: "high",
     content_type: "knowledge",
+    knowledge_level: "case_study",
+    difficulty: "advanced",
+    audience: ["研究人员", "知识工作者"],
+    references: [
+      {
+        title: "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+        publisher: "arXiv",
+        url: "https://arxiv.org/abs/2201.11903",
+        official: true,
+      },
+    ],
+    related_slugs: ["prompt-debugging"],
+    content_format: "markdown",
+    review_status: "editorial",
   },
 ];
 
@@ -280,10 +343,68 @@ function hasMeaningfulChinese(text?: string, minChars = 12) {
   return chinese >= minChars && chinese / Math.max(compact.length, 1) >= 0.08;
 }
 
+const knowledgeLevelMeta: Record<
+  KnowledgeLevel,
+  { label: string; short: string }
+> = {
+  glossary: { label: "基础词条", short: "词条" },
+  deep_dive: { label: "深度知识", short: "深度" },
+  guide: { label: "实践手册", short: "实践" },
+  case_study: { label: "完整案例", short: "案例" },
+};
+
+const difficultyMeta: Record<Difficulty, string> = {
+  beginner: "入门",
+  intermediate: "进阶",
+  advanced: "高级",
+};
+
+/** 生成稳定、支持中文的标题锚点 ID（去除特殊字符，重复标题自动加序号）。 */
+function slugifyAnchor(text: string) {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^\p{L}\p{N}-]+/gu, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function headingIdFor(
+  text: string,
+  seen: Map<string, number>,
+) {
+  const base = slugifyAnchor(text) || "section";
+  const count = seen.get(base) ?? 0;
+  seen.set(base, count + 1);
+  return count > 0 ? `${base}-${count + 1}` : base;
+}
+
+/** 从 Markdown 正文提取 H2/H3 目录（与渲染端使用同一锚点算法）。 */
+function extractHeadings(markdown: string) {
+  const headings: Array<{ id: string; text: string; level: number }> = [];
+  const seen = new Map<string, number>();
+  for (const line of markdown.split("\n")) {
+    const match = /^(#{2,3})\s+(.+?)\s*$/.exec(line);
+    if (!match) continue;
+    const level = match[1].length;
+    const text = match[2].replace(/[*`]/g, "").trim();
+    if (!text) continue;
+    headings.push({ id: headingIdFor(text, seen), text, level });
+  }
+  return headings;
+}
+
 export default function App() {
   const [view, setView] = useState<View>("home");
   const [dashboard, setDashboard] = useState<Dashboard>(demoDashboard);
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
+  const [articleRelated, setArticleRelated] = useState<Article[]>([]);
+  const [articleNav, setArticleNav] = useState<{
+    prev: Article | null;
+    next: Article | null;
+  }>({ prev: null, next: null });
   const [articleBack, setArticleBack] = useState<View>("knowledge");
   const [loading, setLoading] = useState(true);
   const [usingDemo, setUsingDemo] = useState(false);
@@ -329,6 +450,8 @@ export default function App() {
 
   async function openArticle(article: Article, back?: View) {
     setSelectedArticle(article);
+    setArticleRelated([]);
+    setArticleNav({ prev: null, next: null });
     setArticleBack(
       back ?? (article.content_type === "news" ? "news" : "knowledge"),
     );
@@ -338,6 +461,8 @@ export default function App() {
       try {
         const data = await api.article(article.slug);
         setSelectedArticle(data.article);
+        setArticleRelated(data.related ?? []);
+        setArticleNav({ prev: data.prev ?? null, next: data.next ?? null });
       } catch {
         // 保留列表中的内容，避免详情接口临时失败时出现空页。
       }
@@ -493,7 +618,11 @@ export default function App() {
               {view === "article" && selectedArticle && (
                 <ArticlePage
                   article={selectedArticle}
+                  related={articleRelated}
+                  prev={articleNav.prev}
+                  next={articleNav.next}
                   onBack={() => navigate(articleBack)}
+                  onOpenArticle={(a, back) => openArticle(a, back)}
                 />
               )}
             </>
@@ -540,6 +669,9 @@ function HomePage({
   onNavigate: (view: View) => void;
   onOpenArticle: (article: Article, back?: View) => void;
 }) {
+  const featured = dashboard.featured_knowledge?.length
+    ? dashboard.featured_knowledge
+    : dashboard.latest_knowledge;
   return (
     <>
       <section className="hero">
@@ -654,7 +786,7 @@ function HomePage({
           onAction={() => onNavigate("knowledge")}
         />
         <div className="article-grid">
-          {dashboard.latest_knowledge.slice(0, 4).map((article) => (
+          {featured.slice(0, 4).map((article) => (
             <ArticleCard
               key={article.id}
               article={article}
@@ -797,6 +929,10 @@ function ArticleCard({
     article.content_type === "news" &&
     article.source_language &&
     article.source_language !== "zh";
+  const level =
+    article.content_type === "knowledge" && article.knowledge_level
+      ? knowledgeLevelMeta[article.knowledge_level]
+      : null;
   return (
     <button className="article-card" onClick={onClick}>
       <div className="article-meta">
@@ -809,6 +945,18 @@ function ArticleCard({
           <Clock3 size={13} /> {article.reading_minutes}分钟
         </small>
       </div>
+      {level && (
+        <div className="card-badges">
+          <span className={`level-badge level-${article.knowledge_level}`}>
+            {level.label}
+          </span>
+          {article.difficulty && (
+            <span className="difficulty-badge">
+              {difficultyMeta[article.difficulty]}
+            </span>
+          )}
+        </div>
+      )}
       <h3>{article.title}</h3>
       <p>{article.summary}</p>
       <div className="tag-row">
@@ -839,6 +987,7 @@ function ContentLibraryPage({
 }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
+  const [level, setLevel] = useState("");
   const [articles, setArticles] = useState(initialArticles);
   const [searching, setSearching] = useState(false);
   const isKnowledge = contentType === "knowledge";
@@ -851,6 +1000,7 @@ function ContentLibraryPage({
           initialArticles.filter(
             (article) =>
               (!category || article.category_slug === category) &&
+              (!level || article.knowledge_level === level) &&
               (!normalized ||
                 `${article.title} ${article.summary} ${article.content} ${article.tags.join(" ")}`
                   .toLowerCase()
@@ -861,14 +1011,14 @@ function ContentLibraryPage({
       }
       setSearching(true);
       try {
-        const data = await api.articles(query, category, contentType);
+        const data = await api.articles(query, category, contentType, level as KnowledgeLevel);
         setArticles(data.articles);
       } finally {
         setSearching(false);
       }
     }, 280);
     return () => window.clearTimeout(handle);
-  }, [query, category, initialArticles, usingDemo, contentType]);
+  }, [query, category, level, initialArticles, usingDemo, contentType]);
 
   return (
     <>
@@ -877,10 +1027,11 @@ function ContentLibraryPage({
         title={isKnowledge ? "AI知识库" : "资讯库"}
         description={
           isKnowledge
-            ? "系统学习AI基础、模型产品、应用实践与治理安全；支持分类筛选、关键词搜索和来源回溯。"
+            ? "从基础词条到实践手册与完整案例，理解AI、选择AI、使用AI；支持类型、分类与关键词组合筛选。"
             : "保存自动抓取并整理的AI动态；每条资讯保留原文、发布时间、分类、标签和可信度。"
         }
       />
+      {isKnowledge && <LearningPaths onOpenArticle={onOpenArticle} />}
       <div className="library-toolbar">
         <label className="search-box">
           <Search size={18} />
@@ -916,6 +1067,27 @@ function ContentLibraryPage({
             </button>
           ))}
         </div>
+        {isKnowledge && (
+          <div className="filter-pills">
+            <button
+              className={!level ? "active" : ""}
+              onClick={() => setLevel("")}
+            >
+              全部类型
+            </button>
+            {(Object.keys(knowledgeLevelMeta) as KnowledgeLevel[]).map(
+              (key) => (
+                <button
+                  key={key}
+                  className={level === key ? "active" : ""}
+                  onClick={() => setLevel(key)}
+                >
+                  {knowledgeLevelMeta[key].label}
+                </button>
+              ),
+            )}
+          </div>
+        )}
       </div>
       <div className="result-line">
         <span>
@@ -943,12 +1115,117 @@ function ContentLibraryPage({
           <h3>没有找到匹配内容</h3>
           <p>
             {isKnowledge
-              ? "换一个关键词，或者清除分类筛选。"
+              ? "换一个关键词，或者清除类型/分类筛选。"
               : "部署后检查资讯源，或换一个关键词搜索。"}
           </p>
         </div>
       )}
     </>
+  );
+}
+
+const learningPathConfig: Array<{
+  title: string;
+  desc: string;
+  slugs: string[];
+}> = [
+  {
+    title: "我刚开始了解AI",
+    desc: "先建立正确的心智模型",
+    slugs: ["what-is-llm", "what-is-token", "what-is-context-window", "hallucination-explained"],
+  },
+  {
+    title: "我要开始用AI工作",
+    desc: "把AI变成可用的生产力",
+    slugs: ["prompt-debugging", "structured-output", "document-summary-workflow", "ai-search-vs-chat"],
+  },
+  {
+    title: "我要做AI产品",
+    desc: "选型、算账、上生产",
+    slugs: ["model-selection-framework", "ai-api-cost-model", "copilot-vs-agent", "model-benchmark-limits", "fallback-strategy"],
+  },
+  {
+    title: "我要做研究与分析",
+    desc: "用AI辅助定性研究",
+    slugs: ["interview-guide-ai", "open-coding-ai", "thematic-analysis-ai", "qualitative-evidence-chain"],
+  },
+];
+
+function LearningPaths({ onOpenArticle }: { onOpenArticle: (a: Article) => void }) {
+  return (
+    <section className="learning-paths" aria-label="推荐学习路径">
+      <div className="learning-paths-head">
+        <div>
+          <span>从哪里开始？</span>
+          <h2>按你的目标选择学习路径</h2>
+        </div>
+        <small>路径仅按slug配置，文章不存在时自动跳过</small>
+      </div>
+      <div className="learning-path-grid">
+        {learningPathConfig.map((path) => (
+          <div className="learning-path-card" key={path.title}>
+            <h3>{path.title}</h3>
+            <p>{path.desc}</p>
+            <ul>
+              {path.slugs.map((slug) => (
+                <PathLink key={slug} slug={slug} onOpenArticle={onOpenArticle} />
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PathLink({
+  slug,
+  onOpenArticle,
+}: {
+  slug: string;
+  onOpenArticle: (a: Article) => void;
+}) {
+  // 演示模式与线上模式都通过详情接口获取文章，避免写死文章对象。
+  const [title, setTitle] = useState("");
+  const [missing, setMissing] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const cached = demoKnowledge.find((item) => item.slug === slug);
+    if (cached) {
+      setTitle(cached.title);
+      return;
+    }
+    api
+      .article(slug)
+      .then((data) => {
+        if (!alive) return;
+        setTitle(data.article.title);
+      })
+      .catch(() => alive && setMissing(true));
+    return () => {
+      alive = false;
+    };
+  }, [slug]);
+  if (missing) return null;
+  return (
+    <li>
+      <button
+        onClick={async () => {
+          // 用当前知识库中的文章打开；找不到时直接请求详情。
+          const cached = demoKnowledge.find((item) => item.slug === slug);
+          if (cached) return onOpenArticle(cached);
+          try {
+            const data = await api.article(slug);
+            onOpenArticle(data.article);
+          } catch {
+            setMissing(true);
+          }
+        }}
+      >
+        <BookOpen size={14} />
+        {title || "加载中…"}
+      </button>
+    </li>
   );
 }
 
@@ -1196,6 +1473,8 @@ function AdminPage({
     () => localStorage.getItem("ai-compass-admin-token") || "",
   );
   const [sources, setSources] = useState<Source[]>([]);
+  const [knowledgeOverview, setKnowledgeOverview] =
+    useState<KnowledgeOverview | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
@@ -1229,6 +1508,16 @@ function AdminPage({
           last_error: null,
         },
       ]);
+      setKnowledgeOverview({
+        total: 62,
+        glossary: 47,
+        deep_dive: 7,
+        guide: 6,
+        case_study: 2,
+        editorial: 15,
+        markdown: 15,
+        latest_update: new Date().toISOString(),
+      });
       setMessage(
         "当前为演示模式。完成D1迁移并配置ADMIN_TOKEN后，可真实管理来源。",
       );
@@ -1238,8 +1527,12 @@ function AdminPage({
     setLoading(true);
     try {
       localStorage.setItem("ai-compass-admin-token", token);
-      const data = await api.sources(token);
-      setSources(data.sources);
+      const [sourceData, overviewData] = await Promise.all([
+        api.sources(token),
+        api.knowledgeOverview(token),
+      ]);
+      setSources(sourceData.sources);
+      setKnowledgeOverview(overviewData.overview);
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "读取失败");
@@ -1366,6 +1659,52 @@ function AdminPage({
         </button>
       </section>
       {message && <div className="notice">{message}</div>}
+      {knowledgeOverview && (
+        <section className="knowledge-overview">
+          <div className="knowledge-overview-head">
+            <div>
+              <BookOpen size={19} />
+              <strong>知识库概览</strong>
+            </div>
+            {knowledgeOverview.latest_update && (
+              <span>
+                最近更新：
+                {formatDate(knowledgeOverview.latest_update)}
+              </span>
+            )}
+          </div>
+          <div className="knowledge-overview-grid">
+            <div className="ko-card ko-total">
+              <strong>{knowledgeOverview.total}</strong>
+              <span>知识总数</span>
+            </div>
+            <div className="ko-card">
+              <strong>{knowledgeOverview.glossary}</strong>
+              <span>基础词条</span>
+            </div>
+            <div className="ko-card">
+              <strong>{knowledgeOverview.deep_dive}</strong>
+              <span>深度知识</span>
+            </div>
+            <div className="ko-card">
+              <strong>{knowledgeOverview.guide}</strong>
+              <span>实践手册</span>
+            </div>
+            <div className="ko-card">
+              <strong>{knowledgeOverview.case_study}</strong>
+              <span>完整案例</span>
+            </div>
+            <div className="ko-card ko-review">
+              <strong>{knowledgeOverview.editorial}</strong>
+              <span>编辑整理（待人工审）</span>
+            </div>
+            <div className="ko-card">
+              <strong>{knowledgeOverview.markdown}</strong>
+              <span>Markdown深度文</span>
+            </div>
+          </div>
+        </section>
+      )}
       <div className="admin-actions">
         <button className="primary-button" onClick={scan} disabled={loading}>
           <RefreshCw size={17} /> 立即检查全部来源
@@ -1495,20 +1834,486 @@ function AdminPage({
 
 function ArticlePage({
   article,
+  related,
+  prev,
+  next,
   onBack,
+  onOpenArticle,
 }: {
   article: Article;
+  related: Article[];
+  prev: Article | null;
+  next: Article | null;
   onBack: () => void;
+  onOpenArticle: (article: Article, back?: View) => void;
 }) {
   const isKnowledge = article.content_type === "knowledge";
+  useEffect(() => {
+    document.title = `${article.title} - AI Compass`;
+    let meta = document.querySelector('meta[name="description"]');
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.setAttribute("name", "description");
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute(
+      "content",
+      `${article.summary.slice(0, 140)}${article.summary.length > 140 ? "…" : ""}`,
+    );
+    return () => {
+      document.title = "AI Compass · AI知识库与资讯平台";
+    };
+  }, [article.title, article.summary]);
+
+  return (
+    <article className="article-page">
+      <button className="back-link" onClick={onBack}>
+        <ChevronLeft size={18} /> 返回{isKnowledge ? "AI知识库" : "资讯库"}
+      </button>
+      {isKnowledge ? (
+        <KnowledgeArticle
+          article={article}
+          related={related}
+          prev={prev}
+          next={next}
+          onOpenArticle={onOpenArticle}
+        />
+      ) : (
+        <NewsArticle article={article} />
+      )}
+    </article>
+  );
+}
+
+function KnowledgeArticle({
+  article,
+  related,
+  prev,
+  next,
+  onOpenArticle,
+}: {
+  article: Article;
+  related: Article[];
+  prev: Article | null;
+  next: Article | null;
+  onOpenArticle: (article: Article, back?: View) => void;
+}) {
+  const level = article.knowledge_level
+    ? knowledgeLevelMeta[article.knowledge_level]
+    : knowledgeLevelMeta.glossary;
+  const difficulty = article.difficulty
+    ? difficultyMeta[article.difficulty]
+    : "入门";
+  const isMarkdown = article.content_format === "markdown";
+  const headings = useMemo(
+    () => (isMarkdown ? extractHeadings(article.content) : []),
+    [article.content, isMarkdown],
+  );
+  const [tocOpen, setTocOpen] = useState(false);
+
+  // 页面刷新后根据 URL hash 定位到对应标题
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash) return;
+    const id = decodeURIComponent(hash.slice(1));
+    const timer = window.setTimeout(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [article.slug]);
+
+  function scrollToHeading(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+    history.replaceState(null, "", `#${id}`);
+    setTocOpen(false);
+  }
+
+  return (
+    <div className="knowledge-article">
+      <ReadingProgress />
+      <div className="article-layout">
+        <div className="article-main">
+          <div className="article-page-header">
+            <div className="article-meta">
+              <span>
+                知识 · {article.category_name}
+                {level && ` · ${level.label}`}
+              </span>
+              <small>
+                <Clock3 size={13} /> 阅读约{article.reading_minutes}分钟
+              </small>
+            </div>
+            <h1>{article.title}</h1>
+            <p className="article-summary">{article.summary}</p>
+            <div className="article-byline">
+              <span>最近更新：{formatDate(article.updated_at)}</span>
+              {article.difficulty && (
+                <span className={`difficulty-badge difficulty-${article.difficulty}`}>
+                  难度：{difficulty}
+                </span>
+              )}
+              {article.audience && article.audience.length > 0 && (
+                <span>
+                  <Users size={13} /> 适合：{article.audience.join(" / ")}
+                </span>
+              )}
+              <span className={`review-badge review-${article.review_status || "published"}`}>
+                {article.review_status === "editorial"
+                  ? "AI Compass 编辑整理"
+                  : "已发布"}
+              </span>
+            </div>
+          </div>
+
+          {article.why_it_matters && (
+            <div className="why-card">
+              <Sparkles size={20} />
+              <div>
+                <strong>核心理解</strong>
+                <p>{article.why_it_matters}</p>
+              </div>
+            </div>
+          )}
+
+          {headings.length > 1 && (
+            <div className="toc-mobile">
+              <button
+                onClick={() => setTocOpen(!tocOpen)}
+                aria-expanded={tocOpen}
+              >
+                <List size={16} /> 本文目录
+                <ChevronRight
+                  size={15}
+                  className={tocOpen ? "rotated" : ""}
+                />
+              </button>
+              {tocOpen && (
+                <ArticleToc headings={headings} onJump={scrollToHeading} />
+              )}
+            </div>
+          )}
+
+          {isMarkdown ? (
+            <MarkdownContent content={article.content} />
+          ) : (
+            <div className="article-body">
+              {article.content
+                .split(/\n\s*\n/)
+                .filter(Boolean)
+                .map((paragraph, index) => (
+                  <p key={index}>{paragraph}</p>
+                ))}
+            </div>
+          )}
+
+          {article.references && article.references.length > 0 && (
+            <ReferenceList references={article.references} />
+          )}
+
+          <div className="article-source">
+            <div>
+              <ShieldCheck size={18} />
+              <span>
+                <strong>来源</strong>
+                <small>{article.source_name}</small>
+              </span>
+            </div>
+            {article.source_url !== "#" && (
+              <a href={article.source_url} target="_blank" rel="noreferrer">
+                查看原文 <ExternalLink size={15} />
+              </a>
+            )}
+          </div>
+          <div className="tag-row large">
+            {article.tags.map((tag) => (
+              <span key={tag}>#{tag}</span>
+            ))}
+          </div>
+
+          {(prev || next) && (
+            <div className="prev-next">
+              {prev ? (
+                <button
+                  className="prev-next-card"
+                  onClick={() => onOpenArticle(prev, "knowledge")}
+                >
+                  <span>
+                    <ChevronLeft size={14} /> 上一篇
+                  </span>
+                  <strong>{prev.title}</strong>
+                </button>
+              ) : (
+                <span />
+              )}
+              {next ? (
+                <button
+                  className="prev-next-card next"
+                  onClick={() => onOpenArticle(next, "knowledge")}
+                >
+                  <span>
+                    下一篇 <ChevronRight size={14} />
+                  </span>
+                  <strong>{next.title}</strong>
+                </button>
+              ) : (
+                <span />
+              )}
+            </div>
+          )}
+
+          {related.length > 0 && (
+            <section className="related-section">
+              <h2>继续阅读</h2>
+              <div className="related-grid">
+                {related.map((item) => (
+                  <button
+                    key={item.slug}
+                    className="related-card"
+                    onClick={() => onOpenArticle(item, "knowledge")}
+                  >
+                    <span>
+                      {item.category_name}
+                      {item.knowledge_level &&
+                        ` · ${knowledgeLevelMeta[item.knowledge_level].label}`}
+                    </span>
+                    <strong>{item.title}</strong>
+                    <small>约{item.reading_minutes}分钟</small>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+        {headings.length > 1 && (
+          <aside className="article-toc-aside">
+            <div className="toc-sticky">
+              <div className="toc-title">本文目录</div>
+              <ArticleToc headings={headings} onJump={scrollToHeading} />
+            </div>
+          </aside>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ArticleToc({
+  headings,
+  onJump,
+}: {
+  headings: Array<{ id: string; text: string; level: number }>;
+  onJump: (id: string) => void;
+}) {
+  return (
+    <nav className="article-toc" aria-label="本文目录">
+      {headings.map((heading) => (
+        <button
+          key={heading.id}
+          className={heading.level === 3 ? "toc-h3" : ""}
+          onClick={() => onJump(heading.id)}
+        >
+          {heading.text}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function ReadingProgress() {
+  const [progress, setProgress] = useState(0);
+  useEffect(() => {
+    const onScroll = () => {
+      const total =
+        document.documentElement.scrollHeight - window.innerHeight;
+      setProgress(total > 0 ? Math.min(1, window.scrollY / total) : 0);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  return (
+    <div
+      className="reading-progress"
+      aria-hidden="true"
+      style={{ width: `${Math.round(progress * 100)}%` }}
+    />
+  );
+}
+
+/** 在 AST 阶段为 H2/H3 生成稳定锚点 ID（纯函数，StrictMode 双渲染结果一致）。 */
+function remarkHeadingIds() {
+  const seen = new Map<string, number>();
+  return (tree: Root) => {
+    visit(tree, "heading", (node) => {
+      if (node.depth < 2 || node.depth > 3) return;
+      const text = node.children
+        .map((child) => ("value" in child ? String(child.value) : ""))
+        .join("");
+      if (!text.trim()) return;
+      // mdast-util-to-hast 会把 data.hProperties 合并进 hast 节点的属性。
+      const heading = node as unknown as {
+        data?: { hProperties?: Record<string, string> };
+      };
+      heading.data = heading.data ?? {};
+      heading.data.hProperties = heading.data.hProperties ?? {};
+      heading.data.hProperties.id = headingIdFor(text.trim(), seen);
+    });
+  };
+}
+
+function headingIdFromNode(node: unknown) {
+  // 插件写入 mdast 的 data.hProperties，经 mdast-util-to-hast 消费后出现在 hast 的 properties 上。
+  return (node as { properties?: { id?: string } })?.properties?.id;
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <div className="markdown-body">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkHeadingIds]}
+        components={{
+          h2: ({ node, children }) => (
+            <h2 id={headingIdFromNode(node)}>{children}</h2>
+          ),
+          h3: ({ node, children }) => (
+            <h3 id={headingIdFromNode(node)}>{children}</h3>
+          ),
+          a: ({ href, children }) => {
+            const external =
+              href &&
+              /^https?:\/\//.test(href) &&
+              !href.startsWith(window.location.origin);
+            return external ? (
+              <a
+                href={href}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="external-link"
+              >
+                {children} <ExternalLink size={12} />
+              </a>
+            ) : (
+              <a href={href}>{children}</a>
+            );
+          },
+          table: ({ children }) => (
+            <div className="md-table-wrap">
+              <table>{children}</table>
+            </div>
+          ),
+          code: ({ className, children }) => (
+            <code className={className}>{children}</code>
+          ),
+          pre: ({ children }) => <CopyCodeBlock>{children}</CopyCodeBlock>,
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function textFromChildren(node: ReactNode): string {
+  if (node == null) return "";
+  if (typeof node === "string" || typeof node === "number")
+    return String(node);
+  if (Array.isArray(node)) return node.map(textFromChildren).join("");
+  if (typeof node === "object" && "props" in node) {
+    const element = node as ReactElement<{ children?: ReactNode }>;
+    return textFromChildren(element.props.children);
+  }
+  return "";
+}
+
+function CopyCodeBlock({ children }: { children: ReactNode }) {
+  const [copied, setCopied] = useState(false);
+  const codeNode = Array.isArray(children) ? children[0] : children;
+  const className =
+    (codeNode as ReactElement<{ className?: string }>)?.props?.className ||
+    "";
+  const language = /language-([\w-]+)/.exec(className)?.[1] || "";
+  const codeText = textFromChildren(
+    (codeNode as ReactElement<{ children?: ReactNode }>)?.props?.children,
+  );
+  const isPrompt = language === "prompt" || /^【.*】/.test(codeText);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(codeText);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // 剪贴板不可用时静默失败，不打断阅读。
+    }
+  }
+
+  return (
+    <div className="code-block">
+      <div className="code-block-head">
+        <span>{isPrompt ? "Prompt 模板" : language || "代码"}</span>
+        <button
+          onClick={copy}
+          aria-label={isPrompt ? "复制Prompt" : "复制代码"}
+        >
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+          {copied ? "已复制" : isPrompt ? "复制Prompt" : "复制"}
+        </button>
+      </div>
+      <pre>{children}</pre>
+    </div>
+  );
+}
+
+function ReferenceList({
+  references,
+}: {
+  references: Array<{
+    title: string;
+    publisher: string;
+    url: string;
+    type?: string;
+    official?: boolean;
+  }>;
+}) {
+  return (
+    <section className="reference-section">
+      <h2>参考资料</h2>
+      <ol className="reference-list">
+        {references.map((reference, index) => (
+          <li key={`${reference.url}-${index}`}>
+            <div>
+              <span className="reference-index">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <div>
+                <strong>{reference.title}</strong>
+                <small>
+                  {reference.publisher}
+                  {reference.official && (
+                    <em className="reference-official">官方来源</em>
+                  )}
+                </small>
+              </div>
+            </div>
+            {reference.url && (
+              <a href={reference.url} target="_blank" rel="noreferrer">
+                访问 <ExternalLink size={13} />
+              </a>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function NewsArticle({ article }: { article: Article }) {
   const chineseReady =
-    isKnowledge ||
     article.source_language === "zh" ||
     hasMeaningfulChinese(article.content, 30);
   const translationPending =
-    !isKnowledge && article.source_language !== "zh" && !chineseReady;
+    article.source_language !== "zh" && !chineseReady;
   const hasOriginal =
-    !isKnowledge &&
     chineseReady &&
     Boolean(article.original_content) &&
     (article.original_content !== article.content ||
@@ -1528,17 +2333,12 @@ function ArticlePage({
     [visibleContent],
   );
   return (
-    <article className="article-page">
-      <button className="back-link" onClick={onBack}>
-        <ChevronLeft size={18} /> 返回{isKnowledge ? "AI知识库" : "资讯库"}
-      </button>
+    <>
       <div className="article-page-header">
         <div className="article-meta">
           <span>
-            {isKnowledge ? "知识" : "资讯"} · {article.category_name}
-            {!isKnowledge &&
-            article.source_language &&
-            article.source_language !== "zh"
+            资讯 · {article.category_name}
+            {article.source_language && article.source_language !== "zh"
               ? chineseReady
                 ? " · AI中文解读"
                 : " · 中文翻译处理中"
@@ -1560,9 +2360,7 @@ function ArticlePage({
         )}
         {!showOriginal && <p>{article.summary}</p>}
         <div className="article-byline">
-          <span>
-            {isKnowledge ? "更新" : "发布"}于 {formatDate(article.updated_at)}
-          </span>
+          <span>发布于 {formatDate(article.updated_at)}</span>
           <span className={`confidence ${article.confidence}`}>
             可信度：
             {article.confidence === "high"
@@ -1582,7 +2380,7 @@ function ArticlePage({
           </div>
         </div>
       )}
-      {!isKnowledge && hasOriginal && (
+      {hasOriginal && (
         <div className="language-switch">
           <button
             className={!showOriginal ? "active" : ""}
@@ -1602,7 +2400,7 @@ function ArticlePage({
         <div className="why-card">
           <Sparkles size={20} />
           <div>
-            <strong>{isKnowledge ? "核心理解" : "为什么值得关注"}</strong>
+            <strong>为什么值得关注</strong>
             <p>{article.why_it_matters}</p>
           </div>
         </div>
@@ -1631,7 +2429,7 @@ function ArticlePage({
           <span key={tag}>#{tag}</span>
         ))}
       </div>
-    </article>
+    </>
   );
 }
 

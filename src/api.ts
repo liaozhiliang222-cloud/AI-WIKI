@@ -1,9 +1,12 @@
 import type {
   Article,
+  ArticleDetail,
   ContentType,
   Dashboard,
   Digest,
   DigestType,
+  KnowledgeLevel,
+  KnowledgeOverview,
   Source,
 } from "./types";
 
@@ -28,22 +31,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   dashboard: () => request<Dashboard>("/api/dashboard"),
-  articles: (query = "", category = "", contentType?: ContentType) => {
+  articles: (
+    query = "",
+    category = "",
+    contentType?: ContentType,
+    level?: KnowledgeLevel,
+  ) => {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
     if (category) params.set("category", category);
     if (contentType) params.set("type", contentType);
+    if (level) params.set("level", level);
     params.set("limit", "60");
     return request<{ articles: Article[] }>(`/api/articles?${params}`);
   },
   article: (slug: string) =>
-    request<{ article: Article }>(`/api/articles/${encodeURIComponent(slug)}`),
+    request<ArticleDetail>(`/api/articles/${encodeURIComponent(slug)}`),
   latestDigest: (type: DigestType) =>
     request<{ digest: Digest | null }>(`/api/digests/latest?type=${type}`),
   ask: (question: string) =>
     request<{ answer: string; sources: Article[] }>("/api/ask", {
       method: "POST",
       body: JSON.stringify({ question }),
+    }),
+  knowledgeOverview: (token: string) =>
+    request<{ overview: KnowledgeOverview | null }>("/api/admin/knowledge/stats", {
+      headers: { authorization: `Bearer ${token}` },
     }),
   sources: (token: string) =>
     request<{ sources: Source[] }>("/api/admin/sources", {

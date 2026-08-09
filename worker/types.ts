@@ -42,4 +42,13 @@ export type ArticleRow = {
   reading_minutes: number;
   confidence: "high" | "medium" | "low";
   content_type: "knowledge" | "news";
+  knowledge_level: "glossary" | "deep_dive" | "guide" | "case_study";
+  difficulty: "beginner" | "intermediate" | "advanced";
+  audience_json: string;
+  references_json: string;
+  related_slugs_json: string;
+  review_status: string;
+  reviewed_at: string | null;
+  content_format: "plain" | "markdown";
+  featured: number;
 };

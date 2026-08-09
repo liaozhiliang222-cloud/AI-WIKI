@@ -1,5 +1,17 @@
 export type ContentType = "knowledge" | "news";
 
+export type KnowledgeLevel = "glossary" | "deep_dive" | "guide" | "case_study";
+
+export type Difficulty = "beginner" | "intermediate" | "advanced";
+
+export type Reference = {
+  title: string;
+  publisher: string;
+  url: string;
+  type?: string;
+  official?: boolean;
+};
+
 export type Category = {
   id: number;
   slug: string;
@@ -28,6 +40,33 @@ export type Article = {
   reading_minutes: number;
   confidence: "high" | "medium" | "low";
   content_type: ContentType;
+  knowledge_level?: KnowledgeLevel;
+  difficulty?: Difficulty;
+  audience?: string[];
+  references?: Reference[];
+  related_slugs?: string[];
+  review_status?: string;
+  reviewed_at?: string | null;
+  content_format?: "plain" | "markdown";
+  featured?: number;
+};
+
+export type ArticleDetail = {
+  article: Article;
+  related?: Article[];
+  prev?: Article | null;
+  next?: Article | null;
+};
+
+export type KnowledgeOverview = {
+  total: number;
+  glossary: number;
+  deep_dive: number;
+  guide: number;
+  case_study: number;
+  editorial: number;
+  markdown: number;
+  latest_update: string | null;
 };
 
 export type DigestType = "daily" | "weekly";
@@ -60,6 +99,7 @@ export type Dashboard = {
   categories: Category[];
   latest_knowledge: Article[];
   latest_news: Article[];
+  featured_knowledge?: Article[];
   latest_daily: Digest | null;
   latest_weekly: Digest | null;
 };
