@@ -51,4 +51,5 @@ export type ArticleRow = {
   reviewed_at: string | null;
   content_format: "plain" | "markdown";
   featured: number;
+  audience_value: "consumer" | "professional" | "technical";
 };

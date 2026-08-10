@@ -1,6 +1,8 @@
 import type { Env } from "./types";
 import { clampText, parseJsonFromModel } from "./utils";
 
+export type AudienceValue = "consumer" | "professional" | "technical";
+
 export type ArticleAIResult = {
   translatedTitle: string;
   translatedContent: string;
@@ -11,7 +13,26 @@ export type ArticleAIResult = {
   categorySlug: string;
   tags: string[];
   confidence: "high" | "medium" | "low";
+  audienceValue: AudienceValue;
 };
+
+/** 关键词降级推断：AI 不可用时给 audience_value 一个保守默认值。 */
+function inferAudienceValue(text: string): AudienceValue {
+  const normalized = text.toLowerCase();
+  if (
+    /arxiv|论文|preprint|benchmark|数据集|dataset|架构|architecture|参数|微调|fine-tun|训练|training|推理优化|蒸馏|量化|transformer|tokenizer/.test(
+      normalized,
+    )
+  )
+    return "technical";
+  if (
+    /应用|工具|上线|上新|体验|上手|教程|app|插件|客户端|功能更新|现在可用|推出|发布.*应用/.test(
+      normalized,
+    )
+  )
+    return "consumer";
+  return "professional";
+}
 
 function modelText(result: unknown): string {
   if (typeof result === "string") return result;
@@ -220,10 +241,13 @@ export async function summarizeArticle(
     categorySlug: inferCategory(`${input.title} ${input.description}`),
     tags: inferTags(`${input.title} ${input.description}`),
     confidence: "medium",
+    audienceValue: inferAudienceValue(
+      `${input.sourceName} ${input.title} ${input.description}`,
+    ),
   };
 
   try {
-    const prompt = `你是中文AI知识与资讯编辑。请基于下列来源材料输出严格JSON，不要使用Markdown，不要补充材料中没有的信息。\n\n字段要求：\nis_ai_relevant：布尔值，只有内容主要讨论AI、机器学习、大模型、机器人、AI芯片、AI治理或AI应用时才为true；\nsource_language：原文主要语言，使用zh、en或other；\ntranslated_title：准确、自然的中文标题；原文已经是中文时只做必要清理；\ntranslated_content：忠实中文解读。英文原文请翻译并压缩为500-1000个中文字符，保留关键事实、数字、产品名与限制，不逐字复制整篇文章；中文原文请整理为500-1000字的清晰正文；\nsummary：80-140字中文摘要；\nwhy_it_matters：50-100字，解释对AI用户、开发者或知识工作者的影响；\ncategory_slug：只能是 basics、products、practice、research、governance 之一；\ntags：2-5个简短中文标签；\nconfidence：high、medium、low之一。\n\n来源：${input.sourceName}\n标题：${input.title}\n已有摘要：${input.description}\n正文：${clampText(input.content, 12000)}`;
+    const prompt = `你是中文AI知识与资讯编辑。请基于下列来源材料输出严格JSON，不要使用Markdown，不要补充材料中没有的信息。\n\n字段要求：\nis_ai_relevant：布尔值，只有内容主要讨论AI、机器学习、大模型、机器人、AI芯片、AI治理或AI应用时才为true；\nsource_language：原文主要语言，使用zh、en或other；\ntranslated_title：准确、自然的中文标题；原文已经是中文时只做必要清理；\ntranslated_content：忠实中文解读。英文原文请翻译并压缩为500-1000个中文字符，保留关键事实、数字、产品名与限制，不逐字复制整篇文章；中文原文请整理为500-1000字的清晰正文；\nsummary：80-140字中文摘要；\nwhy_it_matters：50-100字，解释对AI用户、开发者或知识工作者的影响；\ncategory_slug：只能是 basics、products、practice、research、governance 之一；\ntags：2-5个简短中文标签；\nconfidence：high、medium、low之一；\naudience_value：consumer、professional、technical之一。consumer=普通消费者可以直接使用或体验的AI应用与功能（工具上新、消费级产品更新、落地案例、面向大众的新功能）；professional=面向专业工作者的AI应用与工作流（办公、开发、研究、运营等场景可用的工具）；technical=模型发布、论文、底层技术、开发者基础设施，普通人无法直接使用。无法确定时选professional。\n\n来源：${input.sourceName}\n标题：${input.title}\n已有摘要：${input.description}\n正文：${clampText(input.content, 12000)}`;
     const result = await env.AI.run(
       env.AI_MODEL as keyof AiModels,
       {
@@ -374,6 +398,11 @@ export async function summarizeArticle(
       confidence: ["high", "medium", "low"].includes(String(parsed.confidence))
         ? (String(parsed.confidence) as ArticleAIResult["confidence"])
         : fallback.confidence,
+      audienceValue: ["consumer", "professional", "technical"].includes(
+        String(parsed.audience_value),
+      )
+        ? (String(parsed.audience_value) as AudienceValue)
+        : fallback.audienceValue,
     };
   } catch (error) {
     console.warn("AI summarization fallback", error);
@@ -457,6 +486,7 @@ export async function createDigestWithAI(
     content?: string;
     source_name?: string;
     confidence?: string;
+    audience_value?: string;
   }>,
 ) {
   const isWeekly = type === "weekly";
@@ -489,6 +519,8 @@ export async function createDigestWithAI(
     const requirements = isWeekly
       ? "输出5-8条精品内容。每条必须包含：title（自然中文标题）、summary（80-140字说明发生了什么）、analysis（180-320字中文深度解读，说明长期影响、适用人群与潜在限制）、takeaways（2-3条中文行动建议或观察点）、article_slug。按重要性排序。"
       : "输出5-10条要点。每条summary用50-100字说明事实和影响，适合3分钟快速阅读。按重要性排序。";
+    const selectionPolicy =
+      "挑选原则：优先选择普通用户或专业工作者能直接使用、体验的AI应用内容（新工具、新功能、消费级产品更新、落地案例）；模型发布、论文与纯底层技术内容只有在影响面很大或与普通人直接相关时才入选。条目中audience_value为consumer的优先级最高，professional次之，technical最低。";
     const result = await env.AI.run(
       env.AI_MODEL as keyof AiModels,
       {
@@ -499,7 +531,7 @@ export async function createDigestWithAI(
           },
           {
             role: "user",
-            content: `请生成中文${isWeekly ? "精品资讯周报" : "AI资讯日报"}。输出字段 title、intro、highlights；${isWeekly ? "highlights每项必须包含title、summary、analysis、takeaways、article_slug" : "highlights每项必须包含title、summary、article_slug"}，并保留给定slug。所有输出必须使用简体中文；品牌名和模型名可以保留英文。${requirements}\n\n条目：${JSON.stringify(articles)}`,
+            content: `请生成中文${isWeekly ? "精品资讯周报" : "AI资讯日报"}。输出字段 title、intro、highlights；${isWeekly ? "highlights每项必须包含title、summary、analysis、takeaways、article_slug" : "highlights每项必须包含title、summary、article_slug"}，并保留给定slug。所有输出必须使用简体中文；品牌名和模型名可以保留英文。${selectionPolicy}${requirements}\n\n条目：${JSON.stringify(articles)}`,
           },
         ],
         max_tokens: isWeekly ? 2200 : 1600,

@@ -49,6 +49,8 @@ export type Article = {
   reviewed_at?: string | null;
   content_format?: "plain" | "markdown";
   featured?: number;
+  /** 资讯的受众价值：consumer=普通用户可用的AI应用 / professional=专业用途 / technical=纯技术内容。 */
+  audience_value?: "consumer" | "professional" | "technical";
 };
 
 export type ArticleDetail = {

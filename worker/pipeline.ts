@@ -140,8 +140,8 @@ export async function processSourceItem(
       INSERT INTO articles
         (source_id, source_item_id, category_id, slug, title, summary, why_it_matters, content,
          original_title, original_content, source_language, source_name, source_url,
-         tags_json, confidence, reading_minutes, published_at, status, content_type, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'news', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         tags_json, confidence, reading_minutes, published_at, status, content_type, audience_value, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'news', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT(source_item_id) DO UPDATE SET
         category_id = excluded.category_id,
         title = excluded.title,
@@ -156,6 +156,7 @@ export async function processSourceItem(
         reading_minutes = excluded.reading_minutes,
         status = excluded.status,
         content_type = 'news',
+        audience_value = excluded.audience_value,
         updated_at = CURRENT_TIMESTAMP
     `,
     )
@@ -178,6 +179,7 @@ export async function processSourceItem(
         readingMinutes(translatedContent),
         item.published_at,
         status,
+        analysis.audienceValue,
       )
       .run();
     await env.DB.prepare(
@@ -224,7 +226,7 @@ export async function generateDigestIfDue(
   const result = await env.DB.prepare(
     `
     SELECT a.slug, a.title, a.summary, a.why_it_matters, substr(a.content, 1, 2600) AS content,
-           a.source_name, a.confidence, COALESCE(s.trust_level, 3) AS trust_level
+           a.source_name, a.confidence, a.audience_value, COALESCE(s.trust_level, 3) AS trust_level
     FROM articles a
     LEFT JOIN sources s ON s.id = a.source_id
     WHERE a.status = 'published'
@@ -235,6 +237,7 @@ export async function generateDigestIfDue(
       AND (a.source_language = 'zh' OR (a.original_content <> '' AND a.content <> a.original_content))
       AND (datetime(a.published_at) >= datetime('now', ?) OR datetime(a.created_at) >= datetime('now', ?))
     ORDER BY
+      CASE a.audience_value WHEN 'consumer' THEN 3 WHEN 'professional' THEN 2 ELSE 1 END DESC,
       COALESCE(s.trust_level, 3) DESC,
       CASE a.confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
       datetime(a.created_at) DESC,
@@ -251,6 +254,7 @@ export async function generateDigestIfDue(
       content: string;
       source_name: string;
       confidence: string;
+      audience_value: string;
       trust_level: number;
     }>();
 

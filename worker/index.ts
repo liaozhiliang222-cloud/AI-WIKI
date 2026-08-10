@@ -21,7 +21,8 @@ const ARTICLE_SELECT = `
          a.published_at, a.updated_at, c.slug AS category_slug, c.name AS category_name,
          a.tags_json, a.reading_minutes, a.confidence, a.content_type,
          a.knowledge_level, a.difficulty, a.audience_json, a.references_json,
-         a.related_slugs_json, a.review_status, a.reviewed_at, a.content_format, a.featured
+         a.related_slugs_json, a.review_status, a.reviewed_at, a.content_format, a.featured,
+         a.audience_value
   FROM articles a JOIN categories c ON c.id = a.category_id
 `;
 
